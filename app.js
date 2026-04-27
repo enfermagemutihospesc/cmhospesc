@@ -24,6 +24,7 @@ try {
 let turno = '', leitoAtual = 0, usuarioEmail = '';
 let leitoParaAlta = 0;
 let modoEdicaoAdm = false;
+let alaAtual = 'todos'; // 'terreo' | 'primeiro' | 'todos'
 
 // Cache em memória da sessão
 const memCache = {};
@@ -184,15 +185,16 @@ async function leitosData(){
 }
 
 // ── NAVEGAÇÃO ────────────────────────────────────────────────────────────────
+const TELAS_SIMPLES = ['t-login','t-turno','t-ala'];
 function mostrarTela(id){
   document.querySelectorAll('.tela').forEach(t => t.classList.remove('ativa'));
-  ['t-login','t-turno'].forEach(tid => {
+  TELAS_SIMPLES.forEach(tid => {
     const el = document.getElementById(tid);
     if (el) el.style.display = 'none';
   });
   const el = document.getElementById(id);
   if (!el) return;
-  if (['t-login','t-turno'].includes(id)) el.style.display = 'flex';
+  if (TELAS_SIMPLES.includes(id)) el.style.display = 'flex';
   else el.classList.add('ativa');
 }
 
@@ -200,16 +202,20 @@ function irTelaTurno(){
   mostrarTela('t-turno');
   const dot = document.getElementById('sync-dot');
   const txt = document.getElementById('sync-txt');
-  if (modoOffline) {
-    dot.className = 'sync-dot err';
-    txt.textContent = 'modo offline – dados locais';
-  } else {
-    dot.className = 'sync-dot ok';
-    txt.textContent = 'conectado ao Firebase';
-  }
+  if (modoOffline) { dot.className='sync-dot err'; txt.textContent='modo offline – dados locais'; }
+  else             { dot.className='sync-dot ok';  txt.textContent='conectado ao Firebase'; }
 }
 function irTurno(){ irTelaTurno(); }
+function irAla(){
+  mostrarTela('t-ala');
+  const sub = document.getElementById('ala-sub');
+  if (sub) sub.textContent = `Turno ${turno === 'DIURNO' ? 'Diurno ☀' : 'Noturno 🌙'} — Selecione a ala`;
+}
 function irLeitos(){ mostrarTela('t-leitos'); renderLeitos(); window.scrollTo(0,0); }
+function escolherAla(ala){
+  alaAtual = ala;
+  irLeitos();
+}
 function irForm(){ mostrarTela('t-form'); window.scrollTo(0,0); }
 
 // ── AUTENTICAÇÃO ─────────────────────────────────────────────────────────────
@@ -244,14 +250,15 @@ function fazerLogout(){
 // ── TURNO ────────────────────────────────────────────────────────────────────
 async function escolherTurno(t){
   turno = t;
-  mostrarTela('t-leitos');
-  const b = document.getElementById('badge-leitos');
-  b.textContent = t === 'DIURNO' ? '☀ DIURNO' : '☽ NOTURNO';
-  b.className = 'badge ' + (t === 'DIURNO' ? 'badge-d' : 'badge-n');
-  document.getElementById('badge-user').textContent = usuarioEmail
-    ? '👤 ' + usuarioEmail.split('@')[0] + ' · Sair'
-    : 'Sair';
-  await renderLeitos();
+  // Atualiza badge para quando chegar nos leitos
+  const setarBadge = () => {
+    const b = document.getElementById('badge-leitos');
+    if (b) { b.textContent = t==='DIURNO'?'☀ DIURNO':'☽ NOTURNO'; b.className='badge '+(t==='DIURNO'?'badge-d':'badge-n'); }
+    const bu = document.getElementById('badge-user');
+    if (bu) bu.textContent = usuarioEmail ? '👤 '+usuarioEmail.split('@')[0]+' · Sair' : 'Sair';
+  };
+  setarBadge();
+  irAla(); // vai para seleção de ala antes dos leitos
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -263,14 +270,26 @@ async function renderLeitos(){
   const d = await leitosData();
   const hj = hoje();
 
-  const leitos = ENFERMARIAS.flatMap(e => e.leitos);
+  // Filtra enfermarias pela ala selecionada
+  const enfsVisiveis = alaAtual === 'todos'
+    ? ENFERMARIAS
+    : ENFERMARIAS.filter(e => e.ala === alaAtual);
+
+  // Atualiza subtítulo
+  const sub = document.getElementById('leitos-sub');
+  if (sub) {
+    const nomeAla = alaAtual === 'terreo' ? 'CM Térreo (Enf. 01–08)' : alaAtual === 'primeiro' ? 'CM 1º Andar (Enf. 09–11)' : 'Todas as enfermarias';
+    sub.textContent = `${turno==='DIURNO'?'☀ Diurno':'☽ Noturno'} · ${nomeAla}`;
+  }
+
+  const leitos = enfsVisiveis.flatMap(e => e.leitos);
   const chaves = leitos
     .filter(num => d[num]?.ocupado)
     .map(num => evKey(num, turno, hj));
 
   const evs = await dbGetMany(chaves);
 
-  for (const enf of ENFERMARIAS) {
+  for (const enf of enfsVisiveis) {
     const secao = document.createElement('div');
     secao.className = 'enfermaria' + (enf.psico ? ' psico' : '');
     const psicoTag = enf.psico ? '<span class="tag-psico">PSICO</span>' : '';
@@ -290,7 +309,6 @@ async function renderLeitos(){
 
       const card = document.createElement('div');
       card.className = 'leito-card' + (l.ocupado ? ' ocupado' : '') + (enf.psico ? ' psico' : '');
-      // CLIQUE DIRETO — vago abre admissão; ocupado abre formulário
       card.onclick = () => abrirLeito(num);
 
       let badges = '';
@@ -591,15 +609,53 @@ function _totalEscala(itens, prefix){
 }
 
 // ── ATB ─────────────────────────────────────────────────────────────────────
-function addAtb(nome='', dias=''){
+function addAtb(nome='', d0=''){
   const cont = document.getElementById('f-atb-list');
+  const uid = 'atb-' + Date.now() + Math.random().toString(36).slice(2,6);
   const row = document.createElement('div');
   row.className = 'atb-row';
   row.innerHTML = `
-    <input type="text" placeholder="Nome do antimicrobiano" value="${esc(nome)}">
-    <span style="font-size:.72rem;color:var(--muted);">D</span>
-    <input type="number" placeholder="dias" value="${dias||''}" min="1">
+    <input type="text" placeholder="Nome do antimicrobiano" value="${esc(nome)}" style="flex:2;min-width:120px;">
+    <div style="display:flex;flex-direction:column;gap:2px;flex-shrink:0;">
+      <span style="font-size:.6rem;font-weight:700;color:var(--muted);text-transform:uppercase;">D0 (início)</span>
+      <input type="date" class="atb-d0" id="${uid}" value="${d0||''}" style="min-width:130px;" onchange="calcDiaAtb(this)">
+    </div>
+    <div style="display:flex;flex-direction:column;gap:2px;align-items:center;flex-shrink:0;">
+      <span style="font-size:.6rem;font-weight:700;color:var(--muted);text-transform:uppercase;">Dia atual</span>
+      <span class="atb-dia-atual" style="font-size:.85rem;font-weight:800;color:var(--verde);min-width:36px;text-align:center;">–</span>
+    </div>
     <button class="rm" onclick="this.parentElement.remove()" title="Remover">×</button>
+  `;
+  cont.appendChild(row);
+  _ativarCaixaAltaEm(row);
+  // Calcula dia imediatamente se já tem data
+  const dateInput = document.getElementById(uid);
+  if (dateInput && d0) calcDiaAtb(dateInput);
+}
+
+function addDispExtra(desc=''){
+  const cont = document.getElementById('disp-extras');
+  const row = document.createElement('div');
+  row.className = 'dyn-row';
+  row.style.marginTop = '5px';
+  row.innerHTML = `
+    <input type="text" placeholder="Descrever dispositivo (ex: Dreno de tórax D, Pigtail...)" value="${esc(desc)}" style="flex:1;">
+    <button class="btn-rem" onclick="this.parentElement.remove()">×</button>
+  `;
+  cont.appendChild(row);
+  _ativarCaixaAltaEm(row);
+}
+
+function addInfusaoExtra(nome='', vol=''){
+  const cont = document.getElementById('infusoes-extras');
+  const row = document.createElement('div');
+  row.className = 'dyn-row';
+  row.style.marginTop = '4px';
+  row.innerHTML = `
+    <input type="text" placeholder="Tipo de infusão (ex: Ringer Lactato, SG 10%...)" value="${esc(nome)}" style="flex:2;">
+    <input type="number" step="0.1" placeholder="ml/h" value="${vol||''}" style="width:80px;flex:none;">
+    <span style="font-size:.68rem;color:var(--muted);">ml/h</span>
+    <button class="btn-rem" onclick="this.parentElement.remove()">×</button>
   `;
   cont.appendChild(row);
   _ativarCaixaAltaEm(row);
@@ -620,6 +676,7 @@ async function abrirForm(num){
     _montarCheckboxes();
     _montarMedidasPrev();
     _montarEscalas();
+    _montarSSVV();
 
     // Limpa
     _limparCamposEditaveis();
@@ -675,17 +732,46 @@ function _limparCamposEditaveis(){
     'f-svd-data','f-diur-m','f-diur-t','f-diur-n',
     'f-avp-local','f-avp-data','f-avc-local','f-avc-data',
     'f-cdl-local','f-cdl-data','f-drt-ins','f-drt-deb',
-    'f-sne-data','f-cisto-data','f-svd2-data','f-disp-outro',
+    'f-sne-data','f-cisto-data','f-svd2-data',
     'f-hv-m','f-hv-t','f-hv-n',
     'f-eletr','f-lesoes','f-ex-feitos','f-ex-sol','f-ex-prep','f-nir',
-    'f-ssvv-m','f-ssvv-t','f-ssvv-n','f-info','f-obs','f-glas'
+    'f-info','f-obs','f-glas'
   ];
   textIds.forEach(id => setF(id, ''));
   document.querySelectorAll('#t-form input[type="checkbox"]').forEach(cb => cb.checked = false);
   document.querySelectorAll('#t-form input[type="radio"]').forEach(r => r.checked = false);
-  ['f-pulseira','f-vni-tipo','f-avc-curat','f-drt-lado','f-sne-tipo'].forEach(id => setF(id, ''));
+  ['f-vni-tipo','f-avc-curat','f-drt-lado','f-sne-tipo'].forEach(id => setF(id, ''));
   document.getElementById('f-atb-list').innerHTML = '';
+  document.getElementById('disp-extras').innerHTML = '';
+  document.getElementById('infusoes-extras').innerHTML = '';
+  // Limpa campos SSVV dinâmicos
+  document.querySelectorAll('#ssvv-turnos input').forEach(i => i.value = '');
   document.getElementById('herd-tag').style.display = 'none';
+}
+
+// ── MONTAGEM DO GRID DE SSVV ─────────────────────────────────────────────────
+function _montarSSVV(){
+  const cont = document.getElementById('ssvv-turnos');
+  if (!cont || cont.dataset.montado) return;
+  const turnos = [
+    { id:'m', label:'Manhã' },
+    { id:'t', label:'Tarde' },
+    { id:'n', label:'Noite' }
+  ];
+  const campos = ['PA','FC','FR','SpO2','Tax','HGT'];
+  cont.innerHTML = turnos.map(tr => `
+    <div style="margin-bottom:10px;">
+      <p class="sub-t" style="margin-bottom:6px;">${tr.label}</p>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:6px;">
+        ${campos.map(c => `
+          <div class="fl" style="flex-direction:column;gap:3px;">
+            <label style="font-size:.68rem;font-weight:700;color:var(--muted);min-width:0;">${c}</label>
+            <input type="text" id="f-ssvv-${tr.id}-${c.toLowerCase().replace('²','2')}" placeholder="${c}">
+          </div>`).join('')}
+      </div>
+    </div>
+  `).join('');
+  cont.dataset.montado = '1';
 }
 
 // ── HERANÇA DE CAMPOS ENTRE TURNOS ──────────────────────────────────────────
@@ -712,7 +798,7 @@ async function _herdarCamposAnterior(leito){
   }
   if (ev.dispositivos) {
     const disp = ev.dispositivos;
-    ['avp','avc','cdl','drt','sne','cisto','svd2','outro'].forEach(k => {
+    ['avp','avc','cdl','drt','sne','cisto','svd2'].forEach(k => {
       if (disp[k] && disp[k].marcado) {
         const cb = document.getElementById('d-' + k);
         if (cb) cb.checked = true;
@@ -725,11 +811,12 @@ async function _herdarCamposAnterior(leito){
     if (disp.sne)   { setF('f-sne-tipo', disp.sne.tipo); setF('f-sne-data', disp.sne.data); }
     if (disp.cisto) { setF('f-cisto-data', disp.cisto.data); }
     if (disp.svd2)  { setF('f-svd2-data', disp.svd2.data); }
-    if (disp.outro) { setF('f-disp-outro', disp.outro.desc); }
   }
-  (ev.atbs || []).forEach(a => { if (a.nome) addAtb(a.nome, a.dias); });
+  (ev.dispExtras || []).forEach(d => addDispExtra(d));
+  (ev.atbs || []).forEach(a => { if (a.nome) addAtb(a.nome, a.d0 || ''); });
   if (ev.dieta) _marcaRadio('dieta', ev.dieta);
   if (ev.hv != null) _marcaRadio('hv', ev.hv);
+  (ev.infusoesExtras || []).forEach(inf => addInfusaoExtra(inf.nome, inf.vol));
   if (ev.svdInstaladaEm) setF('f-svd-data', ev.svdInstaladaEm);
   if (ev.medidasPrev) {
     Object.entries(ev.medidasPrev).forEach(([k, v]) => {
@@ -740,7 +827,7 @@ async function _herdarCamposAnterior(leito){
   _aplicarEscala(BRADEN_ITENS, 'brad',  ev.braden);
   _aplicarEscala(MORSE_ITENS,  'morse', ev.morse);
   _aplicarEscala(FUGULIN_ITENS,'fug',   ev.fugulin);
-  if (ev.pulseira) setF('f-pulseira', ev.pulseira);
+  if (ev.pulseira) _marcaRadio('pulseira', ev.pulseira);
 
   document.getElementById('herd-tag').style.display = 'inline';
   toast('↻ Campos herdados do turno anterior');
@@ -820,9 +907,22 @@ function _coletarDados(){
 
   const atbs = [];
   document.querySelectorAll('#f-atb-list .atb-row').forEach(row => {
-    const nome = row.querySelector('input[type="text"]').value.trim();
-    const dias = row.querySelector('input[type="number"]').value;
-    if (nome) atbs.push({ nome, dias });
+    const nome = row.querySelector('input[type="text"]')?.value.trim() || '';
+    const d0   = row.querySelector('input[type="date"]')?.value || '';
+    if (nome) atbs.push({ nome, d0 });
+  });
+
+  const dispExtras = [];
+  document.querySelectorAll('#disp-extras .dyn-row').forEach(row => {
+    const v = row.querySelector('input[type="text"]')?.value.trim() || '';
+    if (v) dispExtras.push(v);
+  });
+
+  const infusoesExtras = [];
+  document.querySelectorAll('#infusoes-extras .dyn-row').forEach(row => {
+    const nome = row.querySelector('input[type="text"]')?.value.trim() || '';
+    const vol  = row.querySelector('input[type="number"]')?.value || '';
+    if (nome) infusoesExtras.push({ nome, vol });
   });
 
   const dispositivos = {
@@ -832,16 +932,23 @@ function _coletarDados(){
     drt:   { marcado:document.getElementById('d-drt').checked,   lado:gf('f-drt-lado'), ins:gf('f-drt-ins'), deb:gf('f-drt-deb') },
     sne:   { marcado:document.getElementById('d-sne').checked,   tipo:gf('f-sne-tipo'), data:gf('f-sne-data') },
     cisto: { marcado:document.getElementById('d-cisto').checked, data:gf('f-cisto-data') },
-    svd2:  { marcado:document.getElementById('d-svd2').checked,  data:gf('f-svd2-data') },
-    outro: { marcado:document.getElementById('d-outro').checked, desc:gf('f-disp-outro') }
+    svd2:  { marcado:document.getElementById('d-svd2').checked,  data:gf('f-svd2-data') }
   };
+
+  // Coleta SSVV campo a campo
+  const campos = ['pa','fc','fr','spo2','tax','hgt'];
+  const ssvv = {};
+  ['m','t','n'].forEach(tr => {
+    ssvv[tr] = {};
+    campos.forEach(c => { ssvv[tr][c] = gf(`f-ssvv-${tr}-${c}`); });
+  });
 
   return {
     leito: leitoAtual, turno,
     data: gf('f-data'),
     pac: gf('f-pac'), diag: gf('f-diag'), dn: gf('f-dn'), idade: gf('f-idade'),
     adm: gf('f-adm'), admHosp: gf('f-adm-hosp'),
-    comor: gf('f-comor'), alergia: gf('f-alergia'), pulseira: gf('f-pulseira'),
+    comor: gf('f-comor'), alergia: gf('f-alergia'), pulseira: getRadio('pulseira'),
     iso: getRadio('iso'), microorg: gf('f-microorg'),
     pele: getChks(CHK_PELE, 'pele'), peleOutros: gf('f-pele-outros'),
     neuro: getChks(CHK_NEURO, 'neuro'), glas: gf('f-glas'), reducao: gf('f-reducao'),
@@ -858,16 +965,17 @@ function _coletarDados(){
     svdInstaladaEm: gf('f-svd-data'),
     diureseMl: { m:gf('f-diur-m'), t:gf('f-diur-t'), n:gf('f-diur-n') },
     intest: getChks(CHK_INTEST, 'int'),
-    dispositivos,
+    dispositivos, dispExtras,
     hv: getRadio('hv'),
     hvVol: { m:gf('f-hv-m'), t:gf('f-hv-t'), n:gf('f-hv-n') },
+    infusoesExtras,
     atbs,
     eletrolitos: gf('f-eletr'),
     medidasPrev,
     lesoes: gf('f-lesoes'),
     exFeitos: gf('f-ex-feitos'), exSol: gf('f-ex-sol'),
     nir: gf('f-nir'), exPrep: gf('f-ex-prep'),
-    ssvv: { m:gf('f-ssvv-m'), t:gf('f-ssvv-t'), n:gf('f-ssvv-n') },
+    ssvv,
     info: gf('f-info'), obs: gf('f-obs'),
     braden, bradTotal: bradT, bradClass, bradLabel,
     morse,  morseTotal: morseT, morseClass, morseLabel,
@@ -879,7 +987,7 @@ function _coletarDados(){
 
 function _carregarDadosForm(d){
   setF('f-data', d.data || hoje());
-  setF('f-pulseira', d.pulseira || '');
+  if (d.pulseira) _marcaRadio('pulseira', d.pulseira);
 
   if (d.iso) _marcaRadio('iso', d.iso);
   setF('f-microorg', d.microorg || '');
@@ -916,7 +1024,7 @@ function _carregarDadosForm(d){
 
   if (d.dispositivos) {
     const disp = d.dispositivos;
-    ['avp','avc','cdl','drt','sne','cisto','svd2','outro'].forEach(k => {
+    ['avp','avc','cdl','drt','sne','cisto','svd2'].forEach(k => {
       const cb = document.getElementById('d-' + k);
       if (cb && disp[k] && disp[k].marcado) cb.checked = true;
     });
@@ -927,14 +1035,15 @@ function _carregarDadosForm(d){
     if (disp.sne)   { setF('f-sne-tipo', disp.sne.tipo); setF('f-sne-data', disp.sne.data); }
     if (disp.cisto) { setF('f-cisto-data', disp.cisto.data); }
     if (disp.svd2)  { setF('f-svd2-data', disp.svd2.data); }
-    if (disp.outro) { setF('f-disp-outro', disp.outro.desc); }
   }
+  (d.dispExtras || []).forEach(desc => addDispExtra(desc));
 
   if (d.hv != null) _marcaRadio('hv', d.hv);
   if (d.hvVol) { setF('f-hv-m', d.hvVol.m||''); setF('f-hv-t', d.hvVol.t||''); setF('f-hv-n', d.hvVol.n||''); }
+  (d.infusoesExtras || []).forEach(inf => addInfusaoExtra(inf.nome, inf.vol));
 
   document.getElementById('f-atb-list').innerHTML = '';
-  (d.atbs || []).forEach(a => { if (a.nome) addAtb(a.nome, a.dias); });
+  (d.atbs || []).forEach(a => { if (a.nome) addAtb(a.nome, a.d0 || ''); });
 
   setF('f-eletr', d.eletrolitos || '');
 
@@ -951,7 +1060,15 @@ function _carregarDadosForm(d){
   setF('f-nir',      d.nir      || '');
   setF('f-ex-prep',  d.exPrep   || '');
 
-  if (d.ssvv) { setF('f-ssvv-m', d.ssvv.m||''); setF('f-ssvv-t', d.ssvv.t||''); setF('f-ssvv-n', d.ssvv.n||''); }
+  // SSVV — pode ser objeto aninhado (novo) ou string (legado)
+  if (d.ssvv && typeof d.ssvv === 'object') {
+    const campos = ['pa','fc','fr','spo2','tax','hgt'];
+    ['m','t','n'].forEach(tr => {
+      if (d.ssvv[tr] && typeof d.ssvv[tr] === 'object') {
+        campos.forEach(c => setF(`f-ssvv-${tr}-${c}`, d.ssvv[tr][c] || ''));
+      }
+    });
+  }
   setF('f-info', d.info || '');
   setF('f-obs',  d.obs  || '');
 
@@ -960,9 +1077,120 @@ function _carregarDadosForm(d){
   _aplicarEscala(FUGULIN_ITENS,'fug',   d.fugulin);
 }
 
-// ══════════════════════════════════════════════════════════════════════════════
-// PRÉ-VISUALIZAÇÃO
-// ══════════════════════════════════════════════════════════════════════════════
+// ── GERADOR DE TEXTO AUTOMÁTICO PARA OBSERVAÇÕES ─────────────────────────────
+function gerarTextoObs(){
+  const d = _coletarDados();
+  const partes = [];
+
+  // Cabeçalho clínico
+  let dih = '';
+  if (d.admHosp) {
+    const diff = Math.max(1, Math.round((new Date(hoje()+'T00:00:00') - new Date(d.admHosp+'T00:00:00')) / 86400000));
+    dih = `${diff}º DIH`;
+  } else if (d.adm) {
+    const diff = Math.max(1, Math.round((new Date(hoje()+'T00:00:00') - new Date(d.adm+'T00:00:00')) / 86400000));
+    dih = `${diff}º dia de internação`;
+  } else { dih = 'X DIH'; }
+
+  const diag  = d.diag  ? d.diag.trim()  : 'diagnóstico não informado';
+  const comor = d.comor ? '; comorbidades: ' + d.comor.trim() : '';
+  const aler  = (d.alergia && !/^nega|^nkda/i.test(d.alergia.trim()))
+    ? `; alérgico a ${d.alergia.trim()}`
+    : '; nega alergias';
+  partes.push(`Paciente no ${dih} de internação por ${diag}${comor}${aler}.`);
+
+  // Neurológico
+  const neuroPartes = [];
+  if (d.neuro?.length) neuroPartes.push(d.neuro.join(', ').toLowerCase());
+  if (d.glas) neuroPartes.push(`Glasgow ${d.glas}`);
+  if (d.pupilas?.length) neuroPartes.push(`pupilas ${d.pupilas.join(', ').toLowerCase()}`);
+  if (neuroPartes.length) partes.push('Neurológico: ' + neuroPartes.join(', ') + '.');
+
+  // Respiratório
+  const respPartes = [];
+  if (d.torax?.length) respPartes.push(d.torax.join(', ').toLowerCase());
+  if (d.ap?.length) respPartes.push('ausculta: ' + d.ap.join(', ').toLowerCase());
+  if (d.vent) {
+    let ventStr = d.vent;
+    if (d.vent === 'Cateter nasal' && d.ventExtra?.cnLmin) ventStr += ` ${d.ventExtra.cnLmin} L/min`;
+    else if (d.vent === 'Macronebulização' && d.ventExtra?.mvFio2) ventStr += ` FiO₂ ${d.ventExtra.mvFio2}%`;
+    else if (d.vent === 'Máscara NR' && d.ventExtra?.mnrLmin) ventStr += ` ${d.ventExtra.mnrLmin} L/min`;
+    respPartes.push(`ventilação: ${ventStr.toLowerCase()}`);
+  }
+  if (respPartes.length) partes.push('Respiratório: ' + respPartes.join('; ') + '.');
+
+  // Cardiovascular
+  if (d.cv?.length) partes.push('Cardiovascular: ' + d.cv.join(', ').toLowerCase() + '.');
+
+  // Abdome / dieta
+  const abdPartes = [];
+  if (d.abd?.length) abdPartes.push(d.abd.join(', ').toLowerCase());
+  if (d.dieta) abdPartes.push(`dieta: ${d.dieta.toLowerCase()}`);
+  if (abdPartes.length) partes.push('Abdome: ' + abdPartes.join('; ') + '.');
+
+  // Pele
+  const pelePartes = [...(d.pele||[])];
+  if (d.peleOutros) pelePartes.push(d.peleOutros);
+  if (pelePartes.length) partes.push('Pele: ' + pelePartes.join(', ').toLowerCase() + '.');
+
+  // Diurese
+  const diuPartes = [...(d.diurese||[])];
+  const diurTotal = [d.diureseMl?.m, d.diureseMl?.t, d.diureseMl?.n].filter(Boolean).map(Number).reduce((a,b)=>a+b,0);
+  if (diurTotal > 0) diuPartes.push(`débito ${diurTotal} ml no turno`);
+  if (diuPartes.length) partes.push('Diurese: ' + diuPartes.join(', ').toLowerCase() + '.');
+
+  // Eliminações intestinais
+  if (d.intest?.length) partes.push('Eliminações intestinais: ' + d.intest.join(', ').toLowerCase() + '.');
+
+  // Dispositivos
+  const disps = [];
+  const dp = d.dispositivos || {};
+  if (dp.avp?.marcado) disps.push(`AVP${dp.avp.local?' em '+dp.avp.local.toLowerCase():''}`);
+  if (dp.avc?.marcado) disps.push(`AVC${dp.avc.local?' em '+dp.avc.local.toLowerCase():''}`);
+  if (dp.cdl?.marcado) disps.push(`CDL${dp.cdl.local?' em '+dp.cdl.local.toLowerCase():''}`);
+  if (dp.drt?.marcado) disps.push(`dreno de tórax${dp.drt.lado?' '+dp.drt.lado.toLowerCase():''}`);
+  if (dp.sne?.marcado) disps.push(dp.sne.tipo||'SNE/SNG');
+  if (dp.cisto?.marcado) disps.push('cistostomia');
+  if (dp.svd2?.marcado) disps.push('SVD');
+  (d.dispExtras||[]).forEach(e => { if (e) disps.push(e.toLowerCase()); });
+  if (disps.length) partes.push('Dispositivos: ' + disps.join(', ') + '.');
+
+  // ATBs
+  if (d.atbs?.length) {
+    const atbStr = d.atbs.filter(a=>a.nome).map(a => {
+      if (a.d0) {
+        const diff = Math.round((new Date(hoje()+'T00:00:00') - new Date(a.d0+'T00:00:00')) / 86400000);
+        return `${a.nome} (D${diff >= 0 ? diff : '?'})`;
+      }
+      return a.nome;
+    }).join(', ');
+    if (atbStr) partes.push('Antimicrobianos: ' + atbStr + '.');
+  }
+
+  // Escalas
+  const escPartes = [];
+  const bradT = parseInt(document.getElementById('brad-total')?.textContent);
+  const bradL = document.getElementById('brad-label')?.textContent;
+  if (!isNaN(bradT) && bradL && bradL !== 'Não avaliado') escPartes.push(`Braden ${bradT} (${bradL.toLowerCase()})`);
+  const morseT = parseInt(document.getElementById('morse-total')?.textContent);
+  const morseL = document.getElementById('morse-label')?.textContent;
+  if (!isNaN(morseT) && morseL && morseL !== 'Não avaliado') escPartes.push(`Morse ${morseT} (${morseL.toLowerCase()})`);
+  const fugT = parseInt(document.getElementById('fug-total')?.textContent);
+  const fugL = document.getElementById('fug-label')?.textContent;
+  if (!isNaN(fugT) && fugL && fugL !== 'Não avaliado') escPartes.push(`Fugulin ${fugT} (${fugL.toLowerCase()})`);
+  if (escPartes.length) partes.push('Escalas: ' + escPartes.join('; ') + '.');
+
+  const texto = partes.join('\n');
+  const obsEl = document.getElementById('f-obs');
+  if (obsEl) {
+    obsEl.value = texto;
+    obsEl.focus();
+    obsEl.scrollIntoView({ behavior:'smooth', block:'center' });
+  }
+  toast('✓ Texto gerado — edite conforme necessário');
+}
+
+
 async function gerarPreview(){
   const d = _coletarDados();
   if (!d.pac.trim()) { toast('Identifique o paciente primeiro', true); return; }
@@ -1010,13 +1238,19 @@ function _renderPreview(d){
     return vaz ? `${tipo} – vazão ${vaz}` : tipo;
   })();
   const hvText = (() => {
-    if (!d.hv) return 'Nenhuma';
-    const v = d.hvVol || {};
     const partes = [];
-    if (v.m) partes.push(`M ${v.m}`);
-    if (v.t) partes.push(`T ${v.t}`);
-    if (v.n) partes.push(`N ${v.n}`);
-    return partes.length ? `${d.hv} – ${partes.join(' / ')} ml/h` : d.hv;
+    if (d.hv && d.hv !== 'Nenhuma') {
+      const v = d.hvVol || {};
+      const vols = [];
+      if (v.m) vols.push(`M ${v.m}`);
+      if (v.t) vols.push(`T ${v.t}`);
+      if (v.n) vols.push(`N ${v.n}`);
+      partes.push(d.hv + (vols.length ? ` – ${vols.join(' / ')} ml/h` : ''));
+    }
+    (d.infusoesExtras || []).forEach(inf => {
+      if (inf.nome) partes.push(inf.nome + (inf.vol ? ` ${inf.vol} ml/h` : ''));
+    });
+    return partes.length ? partes.join(' · ') : 'Nenhuma';
   })();
   const dispList = [];
   if (d.dispositivos) {
@@ -1028,9 +1262,18 @@ function _renderPreview(d){
     if (dp.sne?.marcado)   dispList.push(`${dp.sne.tipo||'SNE/SNG'}${dp.sne.data?` – inst. ${fmtD(dp.sne.data)}`:''}`);
     if (dp.cisto?.marcado) dispList.push(`Cistostomia${dp.cisto.data?` – inst. ${fmtD(dp.cisto.data)}`:''}`);
     if (dp.svd2?.marcado)  dispList.push(`SVD${dp.svd2.data?` – inst. ${fmtD(dp.svd2.data)}`:''}`);
-    if (dp.outro?.marcado) dispList.push(dp.outro.desc || 'Outro dispositivo');
   }
-  const atbList = (d.atbs || []).filter(a=>a.nome).map(a => `${a.nome}${a.dias?` (D${a.dias})`:''}`);
+  (d.dispExtras || []).forEach(desc => { if (desc) dispList.push(desc); });
+  const atbList = (d.atbs || []).filter(a=>a.nome).map(a => {
+    let texto = a.nome;
+    if (a.d0) {
+      const inicio = new Date(a.d0 + 'T00:00:00');
+      const agora  = new Date(hoje() + 'T00:00:00');
+      const diff   = Math.round((agora - inicio) / 86400000);
+      texto += ` (D0: ${fmtD(a.d0)} — D${diff >= 0 ? diff : '?'})`;
+    }
+    return texto;
+  });
   const medList = [];
   if (d.medidasPrev) {
     const labels = {
@@ -1163,15 +1406,19 @@ function _renderPreview(d){
       </div>
     </div>`:''}
 
-    ${(d.ssvv?.m||d.ssvv?.t||d.ssvv?.n) ? `
-    <div class="pv-sec">
-      <div class="pv-sec-t">SSVV / HGT</div>
-      <div class="pv-sec-c">
-        ${d.ssvv.m?`<div><strong>Manhã:</strong> ${esc(d.ssvv.m)}</div>`:''}
-        ${d.ssvv.t?`<div><strong>Tarde:</strong> ${esc(d.ssvv.t)}</div>`:''}
-        ${d.ssvv.n?`<div><strong>Noite:</strong> ${esc(d.ssvv.n)}</div>`:''}
-      </div>
-    </div>`:''}
+    ${(() => {
+      const campos = ['pa','fc','fr','spo2','tax','hgt'];
+      const labels = {pa:'PA',fc:'FC',fr:'FR',spo2:'SpO2',tax:'Tax',hgt:'HGT'};
+      const turnosLabel = {m:'Manhã',t:'Tarde',n:'Noite'};
+      const linhas = ['m','t','n'].map(tr => {
+        if (!d.ssvv || !d.ssvv[tr]) return '';
+        const vals = campos.filter(c => d.ssvv[tr][c]).map(c => `${labels[c]}: ${esc(d.ssvv[tr][c])}`);
+        if (!vals.length) return '';
+        return `<div style="margin-bottom:3px;"><strong>${turnosLabel[tr]}:</strong> ${vals.join(' · ')}</div>`;
+      }).filter(Boolean);
+      if (!linhas.length) return '';
+      return `<div class="pv-sec"><div class="pv-sec-t">SSVV / HGT</div><div class="pv-sec-c">${linhas.join('')}</div></div>`;
+    })()}
 
     ${d.info ? `
     <div class="pv-sec">
