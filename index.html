@@ -32,14 +32,13 @@ const FIREBASE_CONFIG = {
   measurementId: "G-BK1NM0JE8J"
 };
 
-// URL do Apps Script (o mesmo, já suporta pastaRaizId)
+// URL do Apps Script (suporta pastaRaizId)
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbyHhgR5tmL8nmvN2juaTOnUU1HWw1CCGM8jB1krDHAQf0cNwxIEk0JjxFpc-BMjAn-L/exec';
 
-// ID da pasta no Drive
-const PASTA_EVOLUCAO_ID = '1AvgVlFhRAi-CxiJULQhYH9Mye8k4qedc';
+// ID da pasta no Drive — Clínica Médica (atualizado)
+const PASTA_EVOLUCAO_ID = '1rfFB4r9ZJ_9QYgdPIvBfg08EdCIkqGyE';
 
 // ── ESTRUTURA DAS ENFERMARIAS ────────────────────────────────────
-// Cada enfermaria tem: nome, leitos (lista de números), andar, se é psico
 const ENFERMARIAS = [
   { id: 1,  nome: 'Enfermaria 01', leitos: [1, 2],           andar: 'Térreo', psico: false },
   { id: 2,  nome: 'Enfermaria 02', leitos: [3, 4],           andar: 'Térreo', psico: false },
@@ -55,7 +54,6 @@ const ENFERMARIAS = [
 ];
 const TOTAL_LEITOS = 34;
 
-// Busca a enfermaria de um leito
 function enfermariaDoLeito(leitoNum){
   return ENFERMARIAS.find(e => e.leitos.includes(leitoNum));
 }
@@ -80,7 +78,7 @@ function enfermariaDoLeito(leitoNum){
   </div>
 </div>
 
-<!-- TELA TURNO (Diurno / Noturno, igual à UTI) -->
+<!-- TELA TURNO -->
 <div id="t-turno" style="display:none;">
   <div class="logo-h">
     <h1>HOSPITAL DOS PESCADORES<br>CLÍNICA MÉDICA</h1>
@@ -105,8 +103,8 @@ function enfermariaDoLeito(leitoNum){
   </div>
 </div>
 
-<!-- TELA LEITOS — agrupados por enfermaria -->
-<div id="t-leitos" class="tela" style="max-width:1100px;">
+<!-- TELA LEITOS -->
+<div id="t-leitos" class="tela">
   <div class="app-header" style="border-radius:var(--r);">
     <div><h2>Clínica Médica – Hospital dos Pescadores</h2><small>Selecione o leito para preencher a evolução</small></div>
     <div class="header-right">
@@ -122,220 +120,126 @@ function enfermariaDoLeito(leitoNum){
   </div>
 </div>
 
-<!-- MODAL DE ADMISSÃO -->
-<div class="overlay" id="modal-adm">
-  <div class="modal">
-    <div class="modal-header">
-      <h3 id="modal-adm-titulo">Admissão – Leito</h3>
-      <button class="modal-close" onclick="fecharModalAdm()">×</button>
-    </div>
-    <div class="modal-body">
-      <div><label>Nome do paciente</label><input type="text" id="m-pac" placeholder="Nome completo"></div>
-      <div><label>Diagnóstico</label><input type="text" id="m-diag"></div>
-      <div style="display:flex;gap:8px;">
-        <div style="flex:1;"><label>Data de nascimento</label><input type="date" id="m-dn"></div>
-        <div style="flex:1;"><label>Admissão na enfermaria</label><input type="date" id="m-adm"></div>
-      </div>
-      <div style="display:flex;gap:8px;">
-        <div style="flex:1;"><label>Admissão no hospital</label><input type="date" id="m-adm-hosp"></div>
-        <div style="flex:1;"><label>Sexo</label>
-          <select id="m-sexo">
-            <option value="">– selecione –</option>
-            <option value="M">Masculino</option>
-            <option value="F">Feminino</option>
-          </select>
-        </div>
-      </div>
-      <div><label>Origem</label>
-        <select id="m-origem" onchange="document.getElementById('m-origem-outro-wrap').style.display=this.value==='Transferência de outro serviço'?'flex':'none'">
-          <option value="">– selecione –</option>
-          <option>Pronto Socorro</option>
-          <option>Centro Cirúrgico</option>
-          <option>Outra enfermaria</option>
-          <option>UTI</option>
-          <option value="Transferência de outro serviço">Transferência de outro serviço</option>
-        </select>
-      </div>
-      <div id="m-origem-outro-wrap" style="display:none;">
-        <label>Qual serviço?</label><input type="text" id="m-origem-outro" placeholder="Nome do hospital/serviço">
-      </div>
-      <div><label>Comorbidades</label><textarea id="m-comor" style="min-height:55px;"></textarea></div>
-      <div><label>Alergias</label><input type="text" id="m-alergia" placeholder="Ex: penicilina, dipirona..."></div>
-      <div style="display:flex;gap:6px;justify-content:flex-end;padding-top:6px;">
-        <button class="btn btn-sec btn-sm" onclick="fecharModalAdm()">Cancelar</button>
-        <button class="btn btn-pri btn-sm" onclick="salvarAdmissao()">💾 Salvar</button>
-      </div>
-    </div>
-  </div>
-</div>
-
-<!-- MODAL DE ALTA -->
-<div class="overlay" id="modal-alta">
-  <div class="modal">
-    <div class="modal-header">
-      <h3 id="modal-alta-titulo">Alta – Leito</h3>
-      <button class="modal-close" onclick="fecharModalAlta()">×</button>
-    </div>
-    <div class="modal-body">
-      <div><label>Tipo de alta</label>
-        <select id="alta-tipo" onchange="document.getElementById('alta-destino-wrap').style.display=this.value==='Transferência para outro serviço'?'flex':'none'">
-          <option value="">– selecione –</option>
-          <option>Alta hospitalar</option>
-          <option>Transferência para UTI</option>
-          <option value="Transferência para outro serviço">Transferência para outro serviço</option>
-          <option>Óbito</option>
-          <option>Evasão</option>
-        </select>
-      </div>
-      <div id="alta-destino-wrap" style="display:none;">
-        <label>Destino</label><input type="text" id="alta-destino" placeholder="Para onde foi transferido?">
-      </div>
-      <div style="display:flex;gap:8px;">
-        <div style="flex:2;"><label>Data</label><input type="date" id="alta-data"></div>
-        <div style="flex:1;"><label>Hora</label><input type="time" id="alta-hora"></div>
-      </div>
-      <div><label>Observação</label><textarea id="alta-obs" style="min-height:60px;"></textarea></div>
-      <div style="display:flex;gap:6px;justify-content:flex-end;padding-top:6px;">
-        <button class="btn btn-sec btn-sm" onclick="fecharModalAlta()">Cancelar</button>
-        <button class="btn btn-ok btn-sm" onclick="confirmarAltaFinal()">✓ Confirmar alta</button>
-      </div>
-    </div>
-  </div>
-</div>
-
-<!-- MODAL DE AÇÃO DO LEITO (quando clica em um card) -->
-<div class="overlay" id="modal-leito">
-  <div class="modal">
-    <div class="modal-header">
-      <h3 id="modal-leito-titulo">Leito</h3>
-      <button class="modal-close" onclick="fecharModalLeito()">×</button>
-    </div>
-    <div class="modal-body">
-      <p id="modal-leito-info" style="font-size:.82rem;color:var(--muted);line-height:1.5;margin-bottom:6px;"></p>
-      <button class="btn-opcao" onclick="acaoEvoluir()">
-        <span class="btn-opcao-icon">📋</span>
-        <span class="btn-opcao-texto">
-          <strong>Evolução de Enfermagem</strong>
-          <small>Preencher ficha deste turno</small>
-        </span>
-      </button>
-      <button class="btn-opcao alta" id="btn-dar-alta" onclick="acaoAlta()" style="display:none;">
-        <span class="btn-opcao-icon">🏥</span>
-        <span class="btn-opcao-texto">
-          <strong>Dar Alta</strong>
-          <small>Liberar o leito</small>
-        </span>
-      </button>
-      <button class="btn-opcao edit" id="btn-editar-adm" onclick="acaoEditarAdmissao()" style="display:none;">
-        <span class="btn-opcao-icon">✏️</span>
-        <span class="btn-opcao-texto">
-          <strong>Editar dados do paciente</strong>
-          <small>Nome, diagnóstico, comorbidades, etc.</small>
-        </span>
-      </button>
-      <div style="display:flex;justify-content:flex-end;padding-top:6px;">
-        <button class="btn btn-sec btn-sm" onclick="fecharModalLeito()">Fechar</button>
-      </div>
-    </div>
-  </div>
-</div>
-
-<!-- TELA FORMULÁRIO DE EVOLUÇÃO -->
-<div id="t-form" class="tela" style="max-width:840px;">
+<!-- ═══════════════════════════════════════════
+     TELA FORMULÁRIO DE EVOLUÇÃO
+     ═══════════════════════════════════════════ -->
+<div id="t-form" class="tela">
   <div class="app-header">
-    <div><h2 id="form-titulo">Evolução de Enfermagem</h2><small id="form-sub">Enfermaria · Leito · Turno</small></div>
-    <span class="badge" id="badge-form"></span>
+    <div><h2 id="form-titulo">Evolução – Leito 01</h2><small id="form-sub">Hospital dos Pescadores · Clínica Médica</small></div>
+    <div class="header-right">
+      <span class="badge" id="badge-form"></span>
+    </div>
   </div>
-  <div style="background:white;border:1px solid var(--borda);border-top:none;border-radius:0 0 var(--r) var(--r);padding:1rem;display:flex;flex-direction:column;gap:.7rem;">
+  <div class="card">
 
     <!-- IDENTIFICAÇÃO -->
     <div class="secao">
-      <div class="secao-t">Identificação</div>
+      <div class="secao-t">
+        <span>Identificação do Paciente</span>
+        <span style="display:flex;gap:5px;align-items:center;">
+          <span class="herd-tag" id="herd-tag" style="display:none;">↻ herdado</span>
+          <span class="cloud-tag" id="cloud-tag" style="display:none;">☁ nuvem</span>
+          <button class="btn-add" id="btn-edit-adm" onclick="acaoEditarAdmissao()" title="Editar dados de admissão">✏️ Editar admissão</button>
+        </span>
+      </div>
       <div class="secao-c">
+        <div class="fl"><label>Paciente</label><input type="text" id="f-pac" placeholder="Nome completo" readonly></div>
         <div class="dc">
-          <div style="flex:3;"><label>Paciente</label><input type="text" id="f-pac" readonly style="background:var(--cinza);"></div>
-          <div><label>Leito</label><input type="text" id="f-leito" readonly style="background:var(--cinza);max-width:80px;"></div>
+          <div class="fl"><label>Data</label><input type="date" id="f-data"></div>
+          <div class="fl"><label>Leito</label><input type="text" id="f-leito" readonly></div>
         </div>
         <div class="dc">
-          <div><label>Data</label><input type="date" id="f-data"></div>
-          <div><label>DN</label><input type="date" id="f-dn" readonly style="background:var(--cinza);"></div>
-          <div><label>Idade</label><input type="text" id="f-idade" readonly style="background:var(--cinza);max-width:70px;"></div>
+          <div class="fl"><label>DN</label><input type="date" id="f-dn" readonly></div>
+          <div class="fl"><label>Idade</label><input type="text" id="f-idade" readonly></div>
         </div>
-        <div><label>Diagnóstico</label><input type="text" id="f-diag" readonly style="background:var(--cinza);"></div>
-        <div><label>Admissão na enfermaria</label><input type="date" id="f-adm" readonly style="background:var(--cinza);"></div>
-        <div><label>Comorbidades</label><textarea id="f-comor" readonly style="background:var(--cinza);min-height:40px;"></textarea></div>
+        <div class="fl"><label>Diagnóstico</label><input type="text" id="f-diag" readonly></div>
         <div class="dc">
-          <div style="flex:2;"><label>Alergias</label><input type="text" id="f-alergia"></div>
-          <div><label>Pulseira de identificação</label>
-            <select id="f-pulseira">
-              <option value="">—</option><option value="Sim">Sim</option><option value="Não">Não</option>
-            </select>
-          </div>
+          <div class="fl"><label>Adm. enfermaria</label><input type="date" id="f-adm" readonly></div>
+          <div class="fl"><label>Adm. HOSPESC</label><input type="date" id="f-adm-hosp" readonly></div>
+        </div>
+        <div class="fl"><label>Comorbidades</label><input type="text" id="f-comor" readonly></div>
+        <div class="fl"><label>Alergias</label><input type="text" id="f-alergia" readonly></div>
+        <div class="fl">
+          <label>Pulseira de identificação</label>
+          <select id="f-pulseira" style="max-width:140px;flex:none;">
+            <option value="">– selecione –</option>
+            <option value="Sim">Sim</option>
+            <option value="Não">Não</option>
+          </select>
         </div>
       </div>
     </div>
 
     <!-- ISOLAMENTO -->
     <div class="secao">
-      <div class="secao-t">Isolamento</div>
+      <div class="secao-t"><span>Isolamento</span></div>
       <div class="secao-c">
         <div class="rg">
-          <label class="ri"><input type="radio" name="iso" value=""> Sem isolamento</label>
+          <label class="ri"><input type="radio" name="iso" value="Sem isolamento"> Sem isolamento</label>
+          <label class="ri"><input type="radio" name="iso" value="Vigilância"> Vigilância</label>
           <label class="ri"><input type="radio" name="iso" value="Contato"> Contato</label>
           <label class="ri"><input type="radio" name="iso" value="Gotículas"> Gotículas</label>
           <label class="ri"><input type="radio" name="iso" value="Aerossóis"> Aerossóis</label>
-          <label class="ri"><input type="radio" name="iso" value="Vigilância"> Vigilância</label>
         </div>
-        <div><label>Microrganismo</label><input type="text" id="f-microorg" placeholder="Ex: KPC, MRSA..."></div>
+        <div class="fl"><label>Microrganismo</label><input type="text" id="f-microorg" placeholder="Ex: MRSA, KPC..."></div>
       </div>
     </div>
 
     <!-- PELE E MUCOSAS -->
     <div class="secao">
-      <div class="secao-t">Pele e Mucosas</div>
+      <div class="secao-t"><span>Pele e Mucosas</span></div>
       <div class="secao-c">
-        <div class="chkg" id="chk-pele"></div>
-        <div><label>Outras observações sobre pele/mucosas</label><input type="text" id="f-pele-outros"></div>
+        <div class="cg" id="chk-pele"></div>
+        <div class="fl"><label>Outros achados</label><input type="text" id="f-pele-outros"></div>
       </div>
     </div>
 
-    <!-- AVALIAÇÃO NEUROLÓGICA -->
+    <!-- NEUROLÓGICO -->
     <div class="secao">
-      <div class="secao-t">Avaliação Neurológica</div>
+      <div class="secao-t"><span>Avaliação Neurológica</span></div>
       <div class="secao-c">
-        <div class="chkg" id="chk-neuro"></div>
+        <div class="cg" id="chk-neuro"></div>
         <div class="dc">
-          <div><label>Glasgow (3–15)</label><input type="number" id="f-glas" min="3" max="15"></div>
-          <div style="flex:2;"><label>Redução de força (observação)</label><input type="text" id="f-reducao" placeholder="Ex: hemiparesia E..."></div>
+          <div class="fl"><label>Glasgow</label><input type="number" id="f-glas" min="3" max="15" placeholder="3–15"></div>
+          <div class="fl"><label>Redução de força</label><input type="text" id="f-reducao" placeholder="Ex: hemiparesia D"></div>
         </div>
         <p class="sub-t">Pupilas</p>
-        <div class="chkg" id="chk-pupilas"></div>
+        <div class="cg" id="chk-pupilas"></div>
       </div>
     </div>
 
-    <!-- SISTEMA RESPIRATÓRIO -->
+    <!-- RESPIRATÓRIO -->
     <div class="secao">
-      <div class="secao-t">Sistema Respiratório</div>
+      <div class="secao-t"><span>Sistema Respiratório</span></div>
       <div class="secao-c">
-        <div class="chkg" id="chk-torax"></div>
-        <p class="sub-t">Ausculta pulmonar (AP)</p>
-        <div class="chkg" id="chk-ap"></div>
-        <div><label>Outros achados AP</label><input type="text" id="f-ap-outros"></div>
-      </div>
-    </div>
-
-    <!-- VENTILAÇÃO PULMONAR -->
-    <div class="secao">
-      <div class="secao-t">Ventilação Pulmonar</div>
-      <div class="secao-c">
+        <div class="cg" id="chk-torax"></div>
+        <p class="sub-t">Ausculta Pulmonar</p>
+        <div class="cg" id="chk-ap"></div>
+        <div class="fl"><label>Outros achados AP</label><input type="text" id="f-ap-outros"></div>
+        <p class="sub-t">Ventilação</p>
         <div class="rg">
-          <label class="ri"><input type="radio" name="vent" value="AA"> Ar ambiente</label>
-          <label class="ri"><input type="radio" name="vent" value="CN"> CN <input type="number" step="0.5" id="f-cn-lmin" style="width:55px;margin-left:4px;" placeholder="L/min"></label>
-          <label class="ri"><input type="radio" name="vent" value="MV"> MV <input type="number" id="f-mv-fio2" style="width:55px;margin-left:4px;" placeholder="%"></label>
-          <label class="ri"><input type="radio" name="vent" value="Mascara NR"> Máscara NR <input type="number" step="0.5" id="f-mnr-lmin" style="width:55px;margin-left:4px;" placeholder="L/min"></label>
-          <label class="ri"><input type="radio" name="vent" value="VNI"> VNI
-            <select id="f-vni-tipo" style="margin-left:4px;max-width:90px;">
-              <option value="">—</option><option>BiPAP</option><option>Helmet</option>
+          <label class="ri"><input type="radio" name="vent" value="Ar ambiente"> Ar ambiente</label>
+          <label class="ri">
+            <input type="radio" name="vent" value="Cateter nasal"> Cateter nasal
+            <input type="number" id="f-cn-lmin" placeholder="L/min" min="0" max="15" step="0.5" style="width:65px;margin-left:4px;">
+            <span style="font-size:.68rem;color:var(--muted);">L/min</span>
+          </label>
+          <label class="ri">
+            <input type="radio" name="vent" value="Macronebulização"> MV (macronebulização)
+            <input type="number" id="f-mv-fio2" placeholder="%" min="21" max="100" style="width:55px;margin-left:4px;">
+            <span style="font-size:.68rem;color:var(--muted);">%</span>
+          </label>
+          <label class="ri">
+            <input type="radio" name="vent" value="Máscara NR"> Máscara NR
+            <input type="number" id="f-mnr-lmin" placeholder="L/min" min="0" max="15" step="0.5" style="width:65px;margin-left:4px;">
+            <span style="font-size:.68rem;color:var(--muted);">L/min</span>
+          </label>
+          <label class="ri">
+            <input type="radio" name="vent" value="VNI"> VNI
+            <select id="f-vni-tipo" style="margin-left:4px;font-size:.74rem;padding:3px 6px;">
+              <option value="">tipo</option>
+              <option>BiPAP</option>
+              <option>Helmet</option>
             </select>
           </label>
           <label class="ri"><input type="radio" name="vent" value="Traqueostomia"> Traqueostomia</label>
@@ -345,110 +249,140 @@ function enfermariaDoLeito(leitoNum){
 
     <!-- CARDIOVASCULAR -->
     <div class="secao">
-      <div class="secao-t">Cardiovascular</div>
+      <div class="secao-t"><span>Cardiovascular</span></div>
       <div class="secao-c">
-        <div class="chkg" id="chk-cv"></div>
+        <div class="cg" id="chk-cv"></div>
       </div>
     </div>
 
     <!-- ABDOME -->
     <div class="secao">
-      <div class="secao-t">Abdome</div>
+      <div class="secao-t"><span>Abdome</span></div>
       <div class="secao-c">
-        <div class="chkg" id="chk-abd"></div>
+        <div class="cg" id="chk-abd"></div>
       </div>
     </div>
 
     <!-- DIETA -->
     <div class="secao">
-      <div class="secao-t">Dieta</div>
+      <div class="secao-t"><span>Dieta</span></div>
       <div class="secao-c">
         <div class="rg">
           <label class="ri"><input type="radio" name="dieta" value="Oral"> Oral</label>
-          <label class="ri"><input type="radio" name="dieta" value="SNE"> SNE <input type="text" id="f-sne-vaz" style="width:80px;margin-left:4px;" placeholder="vazão"></label>
-          <label class="ri"><input type="radio" name="dieta" value="SOE"> SOE <input type="text" id="f-soe-vaz" style="width:80px;margin-left:4px;" placeholder="vazão"></label>
-          <label class="ri"><input type="radio" name="dieta" value="SNG"> SNG <input type="text" id="f-sng-vaz" style="width:80px;margin-left:4px;" placeholder="vazão"></label>
-          <label class="ri"><input type="radio" name="dieta" value="NPT"> NPT <input type="text" id="f-npt-vaz" style="width:80px;margin-left:4px;" placeholder="vazão"></label>
-          <label class="ri"><input type="radio" name="dieta" value="GTM"> GTM <input type="text" id="f-gtm-vaz" style="width:80px;margin-left:4px;" placeholder="vazão"></label>
+          <label class="ri">
+            <input type="radio" name="dieta" value="SNE"> SNE
+            <input type="text" id="f-sne-vaz" placeholder="vazão" style="width:90px;margin-left:4px;">
+          </label>
+          <label class="ri">
+            <input type="radio" name="dieta" value="SOE"> SOE
+            <input type="text" id="f-soe-vaz" placeholder="vazão" style="width:90px;margin-left:4px;">
+          </label>
+          <label class="ri">
+            <input type="radio" name="dieta" value="SNG"> SNG
+            <input type="text" id="f-sng-vaz" placeholder="vazão" style="width:90px;margin-left:4px;">
+          </label>
+          <label class="ri">
+            <input type="radio" name="dieta" value="NPT"> NPT
+            <input type="text" id="f-npt-vaz" placeholder="vazão" style="width:90px;margin-left:4px;">
+          </label>
+          <label class="ri">
+            <input type="radio" name="dieta" value="GTM"> GTM
+            <input type="text" id="f-gtm-vaz" placeholder="vazão" style="width:90px;margin-left:4px;">
+          </label>
           <label class="ri"><input type="radio" name="dieta" value="Jejunostomia"> Jejunostomia</label>
-          <label class="ri"><input type="radio" name="dieta" value="Zero ate 2a ordem"> Zero até 2ª ordem</label>
+          <label class="ri"><input type="radio" name="dieta" value="Zero até 2ª ordem"> Zero até 2ª ordem</label>
         </div>
       </div>
     </div>
 
     <!-- DIURESE -->
     <div class="secao">
-      <div class="secao-t">Diurese</div>
+      <div class="secao-t"><span>Diurese</span></div>
       <div class="secao-c">
-        <div class="chkg" id="chk-diurese"></div>
-        <div><label>SVD instalada em</label><input type="date" id="f-svd-data"></div>
-        <div><label>Débito urinário (ml/turno)</label>
-          <div class="dc">
-            <div><label>Manhã</label><input type="number" id="f-diur-m"></div>
-            <div><label>Tarde</label><input type="number" id="f-diur-t"></div>
-            <div><label>Noite</label><input type="number" id="f-diur-n"></div>
-          </div>
+        <div class="cg" id="chk-diurese"></div>
+        <div class="fl"><label>SVD instalada em</label><input type="date" id="f-svd-data"></div>
+        <p class="sub-t">Débito por turno (ml)</p>
+        <div class="dc" style="grid-template-columns:1fr 1fr 1fr;">
+          <div class="fl"><label>Manhã</label><input type="number" id="f-diur-m"></div>
+          <div class="fl"><label>Tarde</label><input type="number" id="f-diur-t"></div>
+          <div class="fl"><label>Noite</label><input type="number" id="f-diur-n"></div>
         </div>
       </div>
     </div>
 
     <!-- ELIMINAÇÕES INTESTINAIS -->
     <div class="secao">
-      <div class="secao-t">Eliminações Intestinais</div>
+      <div class="secao-t"><span>Eliminações Intestinais</span></div>
       <div class="secao-c">
-        <div class="chkg" id="chk-intest"></div>
+        <div class="cg" id="chk-intest"></div>
       </div>
     </div>
 
-    <!-- DISPOSITIVOS MÉDICOS -->
+    <!-- DISPOSITIVOS -->
     <div class="secao">
-      <div class="secao-t">Dispositivos Médicos</div>
+      <div class="secao-t"><span>Dispositivos Médicos</span></div>
       <div class="secao-c">
-        <label class="disp"><input type="checkbox" id="d-avp"> AVP
-          <span class="disp-c"><input type="text" placeholder="local" id="f-avp-local"> <input type="date" id="f-avp-data"></span>
-        </label>
-        <label class="disp"><input type="checkbox" id="d-avc"> AVC
-          <span class="disp-c">
-            <input type="text" placeholder="local" id="f-avc-local">
-            <select id="f-avc-curat">
-              <option value="">curativo</option>
-              <option>Filme estéril</option>
-              <option>Gaze+micropore</option>
-            </select>
-            <input type="date" id="f-avc-data">
-          </span>
-        </label>
-        <label class="disp"><input type="checkbox" id="d-cdl"> CDL p/ HD
-          <span class="disp-c"><input type="text" placeholder="local" id="f-cdl-local"> <input type="date" id="f-cdl-data"></span>
-        </label>
-        <label class="disp"><input type="checkbox" id="d-drt"> Dreno de tórax
-          <span class="disp-c">
-            <select id="f-drt-lado"><option value="">lado</option><option>Direito</option><option>Esquerdo</option></select>
-            <input type="date" id="f-drt-ins" placeholder="inserção">
-            <input type="text" id="f-drt-deb" placeholder="Débito 6h">
-          </span>
-        </label>
-        <label class="disp"><input type="checkbox" id="d-sne"> SNE / SNG
-          <span class="disp-c">
-            <select id="f-sne-tipo"><option value="">tipo</option><option>SNE</option><option>SNG</option></select>
-            <input type="date" id="f-sne-data">
-          </span>
-        </label>
-        <label class="disp"><input type="checkbox" id="d-cisto"> Cistostomia
-          <span class="disp-c"><input type="date" id="f-cisto-data"></span>
-        </label>
-        <label class="disp"><input type="checkbox" id="d-svd2"> SVD
-          <span class="disp-c"><input type="date" id="f-svd2-data"></span>
-        </label>
-        <label class="disp"><input type="checkbox" id="d-outro"> Outro dispositivo
-          <span class="disp-c"><input type="text" id="f-disp-outro" placeholder="descrever"></span>
-        </label>
+        <div class="disp-grid">
+          <label class="disp"><input type="checkbox" id="d-avp"> AVP
+            <span class="disp-c">
+              <input type="text" id="f-avp-local" placeholder="local">
+              <input type="date" id="f-avp-data">
+            </span>
+          </label>
+          <label class="disp"><input type="checkbox" id="d-avc"> AVC
+            <span class="disp-c">
+              <input type="text" id="f-avc-local" placeholder="local">
+              <select id="f-avc-curat">
+                <option value="">curativo</option>
+                <option>Filme estéril</option>
+                <option>Gaze + micropore</option>
+              </select>
+              <input type="date" id="f-avc-data">
+            </span>
+          </label>
+          <label class="disp"><input type="checkbox" id="d-cdl"> CDL / Hemodiálise
+            <span class="disp-c">
+              <input type="text" id="f-cdl-local" placeholder="local">
+              <input type="date" id="f-cdl-data">
+            </span>
+          </label>
+          <label class="disp"><input type="checkbox" id="d-drt"> Dreno de tórax
+            <span class="disp-c">
+              <select id="f-drt-lado">
+                <option value="">lado</option>
+                <option>Direito</option>
+                <option>Esquerdo</option>
+              </select>
+              <input type="date" id="f-drt-ins" placeholder="instalação">
+              <input type="text" id="f-drt-deb" placeholder="débito 6h">
+            </span>
+          </label>
+          <label class="disp"><input type="checkbox" id="d-sne"> SNE / SNG
+            <span class="disp-c">
+              <select id="f-sne-tipo">
+                <option value="">tipo</option>
+                <option>SNE</option>
+                <option>SNG</option>
+              </select>
+              <input type="date" id="f-sne-data">
+            </span>
+          </label>
+          <label class="disp"><input type="checkbox" id="d-cisto"> Cistostomia
+            <span class="disp-c"><input type="date" id="f-cisto-data"></span>
+          </label>
+          <label class="disp"><input type="checkbox" id="d-svd2"> SVD
+            <span class="disp-c"><input type="date" id="f-svd2-data"></span>
+          </label>
+          <label class="disp"><input type="checkbox" id="d-outro"> Outro dispositivo
+            <span class="disp-c"><input type="text" id="f-disp-outro" placeholder="descrever"></span>
+          </label>
+        </div>
       </div>
     </div>
 
     <!-- HIDRATAÇÃO VENOSA -->
     <div class="secao">
-      <div class="secao-t">Hidratação Venosa</div>
+      <div class="secao-t"><span>Hidratação Venosa</span></div>
       <div class="secao-c">
         <div class="rg">
           <label class="ri"><input type="radio" name="hv" value=""> Nenhuma</label>
@@ -458,18 +392,19 @@ function enfermariaDoLeito(leitoNum){
           <label class="ri"><input type="radio" name="hv" value="SG 5%"> SG 5%</label>
         </div>
         <p class="sub-t">Volume por turno (ml/h)</p>
-        <div class="dc">
-          <div><label>Manhã</label><input type="number" step="0.1" id="f-hv-m"></div>
-          <div><label>Tarde</label><input type="number" step="0.1" id="f-hv-t"></div>
-          <div><label>Noite</label><input type="number" step="0.1" id="f-hv-n"></div>
+        <div class="dc" style="grid-template-columns:1fr 1fr 1fr;">
+          <div class="fl"><label>Manhã</label><input type="number" step="0.1" id="f-hv-m"></div>
+          <div class="fl"><label>Tarde</label><input type="number" step="0.1" id="f-hv-t"></div>
+          <div class="fl"><label>Noite</label><input type="number" step="0.1" id="f-hv-n"></div>
         </div>
       </div>
     </div>
 
     <!-- ANTIMICROBIANOS -->
     <div class="secao">
-      <div class="secao-t">Antimicrobianos em Uso</div>
+      <div class="secao-t"><span>Antimicrobianos em Uso</span></div>
       <div class="secao-c">
+        <p style="font-size:.71rem;color:var(--muted);">Informe o nome e o dia de tratamento de cada antimicrobiano.</p>
         <div id="f-atb-list"></div>
         <button class="btn-add" onclick="addAtb()">+ Adicionar antimicrobiano</button>
       </div>
@@ -477,7 +412,7 @@ function enfermariaDoLeito(leitoNum){
 
     <!-- REPOSIÇÃO DE ELETRÓLITOS -->
     <div class="secao">
-      <div class="secao-t">Reposição / Correção de Eletrólitos</div>
+      <div class="secao-t"><span>Reposição / Correção de Eletrólitos</span></div>
       <div class="secao-c">
         <textarea id="f-eletr" placeholder="Ex: KCl 19,1% – 10 mL EV..." style="min-height:55px;"></textarea>
       </div>
@@ -485,7 +420,7 @@ function enfermariaDoLeito(leitoNum){
 
     <!-- MEDIDAS PREVENTIVAS -->
     <div class="secao">
-      <div class="secao-t">Medidas Preventivas</div>
+      <div class="secao-t"><span>Medidas Preventivas</span></div>
       <div class="secao-c">
         <div id="medidas-prev" class="medidas-prev"></div>
       </div>
@@ -493,7 +428,7 @@ function enfermariaDoLeito(leitoNum){
 
     <!-- LESÕES E CURATIVOS -->
     <div class="secao">
-      <div class="secao-t">Lesões e Curativos</div>
+      <div class="secao-t"><span>Lesões e Curativos</span></div>
       <div class="secao-c">
         <textarea id="f-lesoes" placeholder="Localização, tipo, tamanho, aspecto, curativo realizado..." style="min-height:80px;"></textarea>
       </div>
@@ -501,34 +436,34 @@ function enfermariaDoLeito(leitoNum){
 
     <!-- EXAMES -->
     <div class="secao">
-      <div class="secao-t">Exames e Procedimentos Realizados Hoje</div>
+      <div class="secao-t"><span>Exames e Procedimentos Realizados Hoje</span></div>
       <div class="secao-c"><textarea id="f-ex-feitos" style="min-height:60px;"></textarea></div>
     </div>
     <div class="secao">
-      <div class="secao-t">Exames e Pareceres Solicitados Hoje</div>
+      <div class="secao-t"><span>Exames e Pareceres Solicitados Hoje</span></div>
       <div class="secao-c">
         <textarea id="f-ex-sol" style="min-height:60px;"></textarea>
-        <div><label>Comunicado ao NIR às</label><input type="time" id="f-nir" style="max-width:120px;"></div>
+        <div class="fl"><label>Comunicado ao NIR às</label><input type="time" id="f-nir" style="max-width:120px;flex:none;"></div>
       </div>
     </div>
     <div class="secao">
-      <div class="secao-t">Exames e Preparo para o Dia Seguinte</div>
+      <div class="secao-t"><span>Exames e Preparo para o Dia Seguinte</span></div>
       <div class="secao-c"><textarea id="f-ex-prep" style="min-height:60px;"></textarea></div>
     </div>
 
     <!-- SSVV / HGT -->
     <div class="secao">
-      <div class="secao-t">SSVV / HGT (por turno)</div>
+      <div class="secao-t"><span>SSVV / HGT (por turno)</span></div>
       <div class="secao-c">
-        <div><label>Manhã</label><textarea id="f-ssvv-m" placeholder="PA, FC, FR, Tax, SpO2, HGT..." style="min-height:45px;"></textarea></div>
-        <div><label>Tarde</label><textarea id="f-ssvv-t" style="min-height:45px;"></textarea></div>
-        <div><label>Noite</label><textarea id="f-ssvv-n" style="min-height:45px;"></textarea></div>
+        <div class="fl" style="flex-direction:column;align-items:stretch;"><label>Manhã</label><textarea id="f-ssvv-m" placeholder="PA, FC, FR, Tax, SpO2, HGT..." style="min-height:45px;"></textarea></div>
+        <div class="fl" style="flex-direction:column;align-items:stretch;"><label>Tarde</label><textarea id="f-ssvv-t" style="min-height:45px;"></textarea></div>
+        <div class="fl" style="flex-direction:column;align-items:stretch;"><label>Noite</label><textarea id="f-ssvv-n" style="min-height:45px;"></textarea></div>
       </div>
     </div>
 
     <!-- INFORMAÇÕES COMPLEMENTARES -->
     <div class="secao">
-      <div class="secao-t">Informações Complementares</div>
+      <div class="secao-t"><span>Informações Complementares</span></div>
       <div class="secao-c">
         <textarea id="f-info" style="min-height:60px;"></textarea>
       </div>
@@ -536,8 +471,8 @@ function enfermariaDoLeito(leitoNum){
 
     <!-- ESCALA DE BRADEN -->
     <div class="secao" id="sec-braden">
-      <div class="secao-t" style="background:var(--verde);color:white;">
-        Escala de Braden — Risco de Lesão por Pressão
+      <div class="secao-t" style="background:var(--verde);color:white;border-color:var(--verde);">
+        <span>Escala de Braden — Risco de Lesão por Pressão</span>
         <span style="font-weight:400;font-size:.72rem;">Total: <span id="brad-total" style="font-weight:700;">–</span> · <span id="brad-label">Não avaliado</span></span>
       </div>
       <div class="secao-c">
@@ -547,8 +482,8 @@ function enfermariaDoLeito(leitoNum){
 
     <!-- ESCALA DE MORSE -->
     <div class="secao" id="sec-morse">
-      <div class="secao-t" style="background:var(--verde);color:white;">
-        Escala de Morse — Risco de Queda
+      <div class="secao-t" style="background:var(--verde);color:white;border-color:var(--verde);">
+        <span>Escala de Morse — Risco de Queda</span>
         <span style="font-weight:400;font-size:.72rem;">Total: <span id="morse-total" style="font-weight:700;">–</span> · <span id="morse-label">Não avaliado</span></span>
       </div>
       <div class="secao-c">
@@ -558,8 +493,8 @@ function enfermariaDoLeito(leitoNum){
 
     <!-- ESCALA DE FUGULIN -->
     <div class="secao" id="sec-fugulin">
-      <div class="secao-t" style="background:var(--verde);color:white;">
-        Escala de Fugulin Ampliada — Complexidade Assistencial
+      <div class="secao-t" style="background:var(--verde);color:white;border-color:var(--verde);">
+        <span>Escala de Fugulin Ampliada — Complexidade Assistencial</span>
         <span style="font-weight:400;font-size:.72rem;">Total: <span id="fug-total" style="font-weight:700;">–</span> · <span id="fug-label">Não avaliado</span></span>
       </div>
       <div class="secao-c">
@@ -569,7 +504,7 @@ function enfermariaDoLeito(leitoNum){
 
     <!-- OBSERVAÇÕES -->
     <div class="secao">
-      <div class="secao-t">Observações / Intercorrências</div>
+      <div class="secao-t"><span>Observações / Intercorrências</span></div>
       <div class="secao-c">
         <textarea id="f-obs" style="min-height:100px;"></textarea>
       </div>
@@ -596,8 +531,98 @@ function enfermariaDoLeito(leitoNum){
       <button class="btn btn-sec btn-sm" onclick="irForm()">← Editar</button>
       <button class="btn btn-sec btn-sm" onclick="irLeitos()">🛏 Leitos</button>
       <button class="btn btn-pdf btn-sm" id="btn-pdf" onclick="gerarPDF()">☁ Salvar PDF no Drive</button>
+      <button class="btn btn-imp btn-sm" onclick="confirmarAlta()">🏥 Alta</button>
+      <button class="btn btn-warn btn-sm" onclick="prepararTransferencia()">🔄 Transf.</button>
     </div>
     <p id="pdf-status" style="font-size:.72rem;color:var(--muted);text-align:right;"></p>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════
+     MODAL DE ADMISSÃO (também usado para edição)
+     ═══════════════════════════════════════════ -->
+<div class="overlay" id="modal-adm">
+  <div class="modal">
+    <div class="modal-header">
+      <h3 id="modal-adm-titulo">Admissão – Leito</h3>
+      <button class="modal-close" onclick="fecharModalAdm()">×</button>
+    </div>
+    <div class="modal-body">
+      <div><label>Nome do paciente</label><input type="text" id="m-pac" placeholder="Nome completo"></div>
+      <div><label>Diagnóstico</label><input type="text" id="m-diag"></div>
+      <div style="display:flex;gap:8px;">
+        <div style="flex:1;"><label>Data de nascimento</label><input type="date" id="m-dn"></div>
+        <div style="flex:1;"><label>Adm. enfermaria</label><input type="date" id="m-adm"></div>
+      </div>
+      <div style="display:flex;gap:8px;">
+        <div style="flex:1;"><label>Adm. HOSPESC</label><input type="date" id="m-adm-hosp"></div>
+        <div style="flex:1;"><label>Sexo</label>
+          <select id="m-sexo">
+            <option value="">– selecione –</option>
+            <option value="M">Masculino</option>
+            <option value="F">Feminino</option>
+          </select>
+        </div>
+      </div>
+      <div><label>Origem</label>
+        <select id="m-origem" onchange="document.getElementById('m-origem-outro-wrap').style.display=this.value==='Transferência de outro serviço'?'flex':'none'">
+          <option value="">– selecione –</option>
+          <option>Pronto Socorro</option>
+          <option>Centro Cirúrgico</option>
+          <option>Outra enfermaria</option>
+          <option>UTI</option>
+          <option value="Transferência de outro serviço">Transferência de outro serviço</option>
+        </select>
+      </div>
+      <div id="m-origem-outro-wrap" style="display:none;flex-direction:column;gap:5px;">
+        <label>Qual serviço?</label><input type="text" id="m-origem-outro" placeholder="Nome do hospital/serviço">
+      </div>
+      <div><label>Comorbidades</label><textarea id="m-comor" style="min-height:55px;"></textarea></div>
+      <div><label>Alergias</label><input type="text" id="m-alergia" placeholder="Ex: penicilina, dipirona... ou NKDA"></div>
+      <div style="display:flex;justify-content:space-between;align-items:center;padding-top:6px;flex-wrap:wrap;gap:6px;">
+        <button class="btn btn-imp btn-sm" id="btn-alta-modal" onclick="darAltaPeloModal()" style="display:none;">🏥 Alta / Desocupar leito</button>
+        <div style="display:flex;gap:6px;margin-left:auto;">
+          <button class="btn btn-sec btn-sm" onclick="fecharModalAdm()">Cancelar</button>
+          <button class="btn btn-ok btn-sm" onclick="salvarAdmissao()">💾 Salvar</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL DE ALTA -->
+<div class="overlay" id="modal-alta">
+  <div class="modal">
+    <div class="modal-header">
+      <h3 id="modal-alta-titulo">🏥 Alta do Paciente</h3>
+      <button class="modal-close" onclick="fecharModalAlta()">×</button>
+    </div>
+    <div class="modal-body">
+      <p style="font-size:.78rem;color:var(--muted);line-height:1.5;">Registre o tipo de alta, a data e a hora para manter o histórico clínico e permitir o cálculo de indicadores futuros.</p>
+      <div><label>Tipo de alta</label>
+        <select id="alta-tipo" onchange="document.getElementById('alta-destino-wrap').style.display=this.value==='Transferência para outro serviço'?'flex':'none'">
+          <option value="">– selecione –</option>
+          <option value="Alta hospitalar">Alta hospitalar</option>
+          <option value="Transferência para UTI">Transferência para UTI</option>
+          <option value="Transferência para outro serviço">Transferência para outro serviço</option>
+          <option value="Óbito">Óbito</option>
+          <option value="Evasão">Evasão</option>
+        </select>
+      </div>
+      <div id="alta-destino-wrap" style="display:none;flex-direction:column;gap:5px;">
+        <label>Para qual serviço?</label>
+        <input type="text" id="alta-destino" placeholder="Ex: UPA Esperança, Hospital Walfredo...">
+      </div>
+      <div style="display:flex;gap:8px;">
+        <div style="flex:1;"><label>Data da alta</label><input type="date" id="alta-data"></div>
+        <div style="flex:1;"><label>Hora da alta</label><input type="time" id="alta-hora"></div>
+      </div>
+      <div><label>Observação (opcional)</label><textarea id="alta-obs" placeholder="Qualquer informação adicional sobre a alta..." style="min-height:60px;"></textarea></div>
+      <div style="display:flex;justify-content:flex-end;gap:6px;padding-top:4px;">
+        <button class="btn btn-sec btn-sm" onclick="fecharModalAlta()">Cancelar</button>
+        <button class="btn btn-imp btn-sm" onclick="confirmarAltaFinal()">Confirmar Alta</button>
+      </div>
+    </div>
   </div>
 </div>
 
