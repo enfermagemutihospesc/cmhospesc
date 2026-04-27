@@ -1,10 +1,11 @@
 /* ══════════════════════════════════════════════════════════════
-   SISTEMA CLÍNICA MÉDICA UTI – HOSPESC
+   SISTEMA CLÍNICA MÉDICA – HOSPITAL DOS PESCADORES
    Chaves no Firestore (prefixo cm_):
-     cm_leitos                      → estado dos 34 leitos
-     cm_ev_<leito>_<turno>_<data>  → evolução
-     cm_admissao_log                → log de admissões (futuro uso)
-     cm_alta_log                    → log de altas (futuro uso)
+     cm_leitos                       → estado dos 34 leitos
+     cm_ev_<leito>_<turno>_<data>    → evolução
+     cm_admissao_log                 → log de admissões
+     cm_alta_log                     → log de altas
+   Coleção: 'uti' (compartilhada com UTI; isolamento via prefixo cm_)
    ══════════════════════════════════════════════════════════════ */
 
 // ── FIREBASE ─────────────────────────────────────────────────────────────────
@@ -24,11 +25,11 @@ let turno = '', leitoAtual = 0, usuarioEmail = '';
 let leitoParaAlta = 0;
 let modoEdicaoAdm = false;
 
-// Cache em memória da sessão — evita chamadas repetidas ao Firestore
+// Cache em memória da sessão
 const memCache = {};
-function memSet(key, val){ memCache[key] = val; }
-function memGet(key){ return key in memCache ? memCache[key] : undefined; }
-function memDel(key){ delete memCache[key]; }
+function memSet(k, v){ memCache[k] = v; }
+function memGet(k){ return k in memCache ? memCache[k] : undefined; }
+function memDel(k){ delete memCache[k]; }
 
 // ── UTILITÁRIOS ──────────────────────────────────────────────────────────────
 function pad(n){ return String(n).padStart(2,'0'); }
@@ -40,6 +41,16 @@ function fmtD(s){
   if (!s) return '';
   const [y,m,d] = s.split('-');
   return `${d}/${m}/${y}`;
+}
+function calcIdade(dn){
+  if (!dn) return '';
+  const [y,m,d] = dn.split('-').map(Number);
+  if (!y) return '';
+  const hojeD = new Date();
+  let idade = hojeD.getFullYear() - y;
+  const mAtual = hojeD.getMonth() + 1;
+  if (mAtual < m || (mAtual === m && hojeD.getDate() < d)) idade--;
+  return idade > 0 ? idade + ' anos' : '';
 }
 function gf(id){ const el = document.getElementById(id); return el ? el.value : ''; }
 function setF(id, v){
@@ -66,15 +77,12 @@ function hideLoading(){
   document.getElementById('loading-overlay').classList.remove('show');
 }
 
-// ── DB (mesmo formato da UTI: {value, updatedAt}) ────────────────────────────
+// ── DB (formato: {value, updatedAt}) ─────────────────────────────────────────
 async function dbGet(key){
-  // 1) cache em memória (mais rápido)
   const mem = memGet(key);
   if (mem !== undefined) return mem;
-  // 2) localStorage (síncrono, sem rede)
   const cached = localStorage.getItem(key);
   const cachedVal = cached ? (() => { try { return JSON.parse(cached); } catch(e){ return undefined; } })() : undefined;
-  // Retorna o cache local imediatamente se disponível e vai buscar Firestore em background
   if (!modoOffline && db) {
     const fsPromise = db.collection('uti').doc(key).get().then(doc => {
       if (doc.exists) {
@@ -87,10 +95,8 @@ async function dbGet(key){
         }
       }
       return cachedVal ?? null;
-    }).catch(e => { console.warn('dbGet firestore:', e); return cachedVal ?? null; });
-    // Se já tem cache local, retorna imediato e deixa o Firestore atualizar em background
+    }).catch(e => { console.warn('dbGet:', e); return cachedVal ?? null; });
     if (cachedVal !== undefined) { fsPromise; return cachedVal; }
-    // Sem cache: espera o Firestore
     const val = await fsPromise;
     memSet(key, val);
     return val;
@@ -108,14 +114,21 @@ async function dbSet(key, value){
         value,
         updatedAt: firebase.firestore.FieldValue.serverTimestamp()
       });
-    } catch(e) { console.warn('dbSet firestore:', e); }
+    } catch(e) { console.warn('dbSet:', e); }
   }
 }
 
-// Busca múltiplas chaves em paralelo (uma única ida ao Firestore por chave, todas simultâneas)
+async function dbDelete(key){
+  memDel(key);
+  localStorage.removeItem(key);
+  if (!modoOffline && db) {
+    try { await db.collection('uti').doc(key).delete(); }
+    catch(e){ console.warn('dbDelete:', e); }
+  }
+}
+
 async function dbGetMany(keys){
   if (!keys.length) return {};
-  // Primeiro verifica quais já estão em memória/localStorage
   const result = {};
   const toFetch = [];
   for (const key of keys) {
@@ -127,7 +140,6 @@ async function dbGetMany(keys){
     }
     toFetch.push(key);
   }
-  // Busca o que falta no Firestore em paralelo
   if (toFetch.length && !modoOffline && db) {
     await Promise.all(toFetch.map(async key => {
       try {
@@ -149,7 +161,6 @@ async function dbGetMany(keys){
       }
     }));
   }
-  // Preenche nulls para keys não encontradas
   for (const key of keys) { if (!(key in result)) result[key] = null; }
   return result;
 }
@@ -163,7 +174,6 @@ function evKey(leito, turno, data){
 async function leitosData(){
   let d = await dbGet('cm_leitos');
   if (!d) {
-    // Inicializa com 34 leitos vagos
     d = {};
     for (let i = 1; i <= TOTAL_LEITOS; i++) {
       d[i] = { ocupado:false, pac:'', diag:'', dn:'', adm:'', admHosp:'', comor:'', alergia:'' };
@@ -200,6 +210,7 @@ function irTelaTurno(){
 }
 function irTurno(){ irTelaTurno(); }
 function irLeitos(){ mostrarTela('t-leitos'); renderLeitos(); window.scrollTo(0,0); }
+function irForm(){ mostrarTela('t-form'); window.scrollTo(0,0); }
 
 // ── AUTENTICAÇÃO ─────────────────────────────────────────────────────────────
 async function fazerLogin(){
@@ -243,20 +254,20 @@ async function escolherTurno(t){
   await renderLeitos();
 }
 
-// ── RENDER LEITOS — agrupados por enfermaria ─────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+// RENDER LEITOS — agrupados por enfermaria
+// ══════════════════════════════════════════════════════════════════════════════
 async function renderLeitos(){
   const wrap = document.getElementById('enfermarias-wrap');
   wrap.innerHTML = '';
   const d = await leitosData();
   const hj = hoje();
 
-  // Coleta todas as chaves de evolução dos leitos ocupados de uma vez
   const leitos = ENFERMARIAS.flatMap(e => e.leitos);
   const chaves = leitos
     .filter(num => d[num]?.ocupado)
     .map(num => evKey(num, turno, hj));
 
-  // Busca todas em paralelo — uma única rodada de I/O
   const evs = await dbGetMany(chaves);
 
   for (const enf of ENFERMARIAS) {
@@ -279,7 +290,8 @@ async function renderLeitos(){
 
       const card = document.createElement('div');
       card.className = 'leito-card' + (l.ocupado ? ' ocupado' : '') + (enf.psico ? ' psico' : '');
-      card.onclick = () => abrirModalLeito(num);
+      // CLIQUE DIRETO — vago abre admissão; ocupado abre formulário
+      card.onclick = () => abrirLeito(num);
 
       let badges = '';
       if (l.ocupado) {
@@ -305,46 +317,17 @@ async function renderLeitos(){
   }
 }
 
-// ── MODAL AÇÃO DO LEITO ──────────────────────────────────────────────────────
-async function abrirModalLeito(leito){
-  leitoAtual = leito;
+// ── ABRIR LEITO — clique direto: vago→admissão, ocupado→formulário ───────────
+async function abrirLeito(num){
+  leitoAtual = num;
   const d = await leitosData();
-  const l = d[leito];
-  const enf = enfermariaDoLeito(leito);
-  const tit = `${enf.nome} – Leito ${pad(leito)}`;
-  document.getElementById('modal-leito-titulo').textContent = tit;
-
-  const info = document.getElementById('modal-leito-info');
-  const btnAlta = document.getElementById('btn-dar-alta');
-  const btnEdit = document.getElementById('btn-editar-adm');
-
+  const l = d[num];
   if (l && l.ocupado) {
-    info.innerHTML = `<strong>${esc(l.pac)}</strong><br>${esc(l.diag||'(sem diagnóstico)')}
-      ${l.adm?`<br><small>Admitido em ${fmtD(l.adm)}</small>`:''}`;
-    btnAlta.style.display = '';
-    btnEdit.style.display = '';
+    abrirForm(num);
   } else {
-    info.innerHTML = '<em style="color:var(--muted);">Leito vago. Ao abrir a evolução será solicitada a admissão do paciente.</em>';
-    btnAlta.style.display = 'none';
-    btnEdit.style.display = 'none';
-  }
-  document.getElementById('modal-leito').classList.add('show');
-}
-
-function fecharModalLeito(){
-  document.getElementById('modal-leito').classList.remove('show');
-}
-
-async function acaoEvoluir(){
-  fecharModalLeito();
-  const d = await leitosData();
-  const l = d[leitoAtual];
-  if (!l || !l.ocupado) {
     modoEdicaoAdm = false;
-    abrirModalAdm(leitoAtual, true);
-    return;
+    abrirModalAdm(num, true);
   }
-  abrirForm(leitoAtual);
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -391,223 +374,112 @@ const MEDIDAS_PREV = [
   { id:'mp-higi',    q:'Higiene oral adequada?' }
 ];
 
-// ── BRADEN ──
 const BRADEN_ITENS = [
   { id:'b1', label:'Percepção sensorial', ops:[
-    {pt:1, tx:'Totalmente limitado'},
-    {pt:2, tx:'Muito limitado'},
-    {pt:3, tx:'Levemente limitado'},
-    {pt:4, tx:'Nenhuma limitação'}
+    {pt:1, tx:'Totalmente limitado'},{pt:2, tx:'Muito limitado'},
+    {pt:3, tx:'Levemente limitado'},{pt:4, tx:'Nenhuma limitação'}
   ]},
   { id:'b2', label:'Umidade', ops:[
-    {pt:1, tx:'Excessiva'},
-    {pt:2, tx:'Muita'},
-    {pt:3, tx:'Ocasional'},
-    {pt:4, tx:'Rara'}
+    {pt:1, tx:'Excessiva'},{pt:2, tx:'Muita'},
+    {pt:3, tx:'Ocasional'},{pt:4, tx:'Rara'}
   ]},
   { id:'b3', label:'Atividade', ops:[
-    {pt:1, tx:'Acamado'},
-    {pt:2, tx:'Confinado a cadeira'},
-    {pt:3, tx:'Deambula ocasionalmente'},
-    {pt:4, tx:'Deambula frequentemente'}
+    {pt:1, tx:'Acamado'},{pt:2, tx:'Confinado a cadeira'},
+    {pt:3, tx:'Deambula ocasionalmente'},{pt:4, tx:'Deambula frequentemente'}
   ]},
   { id:'b4', label:'Mobilidade', ops:[
-    {pt:1, tx:'Imóvel'},
-    {pt:2, tx:'Muito limitado'},
-    {pt:3, tx:'Discreta limitação'},
-    {pt:4, tx:'Sem limitação'}
+    {pt:1, tx:'Imóvel'},{pt:2, tx:'Muito limitado'},
+    {pt:3, tx:'Discreta limitação'},{pt:4, tx:'Sem limitação'}
   ]},
   { id:'b5', label:'Nutrição', ops:[
-    {pt:1, tx:'Deficiente'},
-    {pt:2, tx:'Inadequada'},
-    {pt:3, tx:'Adequada'},
-    {pt:4, tx:'Excelente'}
+    {pt:1, tx:'Deficiente'},{pt:2, tx:'Inadequada'},
+    {pt:3, tx:'Adequada'},{pt:4, tx:'Excelente'}
   ]},
   { id:'b6', label:'Fricção e cisalhamento', ops:[
-    {pt:1, tx:'Problema'},
-    {pt:2, tx:'Problema potencial'},
-    {pt:3, tx:'Sem problema'}
+    {pt:1, tx:'Problema'},{pt:2, tx:'Problema potencial'},{pt:3, tx:'Sem problema'}
   ]}
 ];
 
-// ── MORSE ──
 const MORSE_ITENS = [
   { id:'m1', label:'Histórico de quedas', ops:[
-    {pt:0, tx:'Não'},
-    {pt:25, tx:'Sim'}
+    {pt:0, tx:'Não'},{pt:25, tx:'Sim'}
   ]},
   { id:'m2', label:'Diagnóstico secundário', ops:[
-    {pt:0, tx:'Não'},
-    {pt:15, tx:'Sim'}
+    {pt:0, tx:'Não'},{pt:15, tx:'Sim'}
   ]},
   { id:'m3', label:'Auxílio na deambulação', ops:[
-    {pt:0, tx:'Nenhum / acamado / auxiliado por profissional'},
-    {pt:15, tx:'Muletas / bengala / andador'},
-    {pt:30, tx:'Mobiliário / parede'}
+    {pt:0, tx:'Nenhum/Acamado'},{pt:15, tx:'Muletas/Bengala/Andador'},{pt:30, tx:'Mobiliário/Parede'}
   ]},
-  { id:'m4', label:'Terapia endovenosa / dispositivo EV', ops:[
-    {pt:0, tx:'Não'},
-    {pt:20, tx:'Sim'}
+  { id:'m4', label:'Terapia endovenosa', ops:[
+    {pt:0, tx:'Não'},{pt:20, tx:'Sim'}
   ]},
   { id:'m5', label:'Marcha', ops:[
-    {pt:0, tx:'Normal / sem deambulação / acamado / cadeira de rodas'},
-    {pt:10, tx:'Fraca'},
-    {pt:20, tx:'Comprometida'}
+    {pt:0, tx:'Normal/Acamado'},{pt:10, tx:'Fraca'},{pt:20, tx:'Comprometida'}
   ]},
   { id:'m6', label:'Estado mental', ops:[
-    {pt:0, tx:'Orientado / capaz quanto a sua capacidade/limitação'},
-    {pt:15, tx:'Superestima capacidade / esquece limitações'}
+    {pt:0, tx:'Orientado'},{pt:15, tx:'Superestima/Esquece limitações'}
   ]}
 ];
 
-// ── FUGULIN AMPLIADA ──
 const FUGULIN_ITENS = [
-  { id:'f1',  label:'Estado mental', ops:[
-    {pt:4, tx:'Inconsciente'},
-    {pt:3, tx:'Períodos de inconsciência'},
-    {pt:2, tx:'Períodos de desorientação no tempo/espaço'},
-    {pt:1, tx:'Orientação no tempo e espaço'}
+  { id:'f1', label:'Estado mental', ops:[
+    {pt:1, tx:'Orientado'},{pt:2, tx:'Períodos intermitentes de desorientação'},
+    {pt:3, tx:'Períodos de inconsciência'},{pt:4, tx:'Inconsciente'}
   ]},
-  { id:'f2',  label:'Oxigenação', ops:[
-    {pt:4, tx:'Ventilação mecânica'},
-    {pt:3, tx:'Uso contínuo de O2'},
-    {pt:2, tx:'Uso intermitente de O2'},
-    {pt:1, tx:'Não depende de O2'}
+  { id:'f2', label:'Oxigenação', ops:[
+    {pt:1, tx:'Não depende de oxigênio'},{pt:2, tx:'Cateter/Máscara intermitente'},
+    {pt:3, tx:'Cateter/Máscara contínuo'},{pt:4, tx:'VM ou VNI'}
   ]},
-  { id:'f3',  label:'Sinais vitais', ops:[
-    {pt:4, tx:'Controle ≤ 2/2 horas'},
-    {pt:3, tx:'Controle até 4/4 horas'},
-    {pt:2, tx:'Controle entre 4/6 horas'},
-    {pt:1, tx:'Controle 8/8 horas'}
+  { id:'f3', label:'Sinais vitais', ops:[
+    {pt:1, tx:'Controle de rotina (8/8h)'},{pt:2, tx:'Controle 6/6h'},
+    {pt:3, tx:'Controle 4/4h'},{pt:4, tx:'Controle de 2/2h ou mais frequente'}
   ]},
-  { id:'f4',  label:'Motilidade', ops:[
-    {pt:4, tx:'Incapaz de movimentar qualquer segmento'},
-    {pt:3, tx:'Dificuldade de movimentar segmentos'},
-    {pt:2, tx:'Limitação de movimentos'},
-    {pt:1, tx:'Movimenta todos os segmentos'}
+  { id:'f4', label:'Motilidade', ops:[
+    {pt:1, tx:'Movimenta todos os segmentos'},{pt:2, tx:'Limitação de movimentos'},
+    {pt:3, tx:'Dificuldade para movimentar segmentos'},{pt:4, tx:'Incapaz de movimentar-se'}
   ]},
-  { id:'f5',  label:'Deambulação', ops:[
-    {pt:4, tx:'Restrito ao leito'},
-    {pt:3, tx:'Locomoção por cadeira de rodas'},
-    {pt:2, tx:'Necessita auxílio para deambular'},
-    {pt:1, tx:'Ambulante'}
+  { id:'f5', label:'Deambulação', ops:[
+    {pt:1, tx:'Ambulante'},{pt:2, tx:'Auxílio para deambular'},
+    {pt:3, tx:'Senta com auxílio'},{pt:4, tx:'Restrito ao leito'}
   ]},
-  { id:'f6',  label:'Alimentação', ops:[
-    {pt:4, tx:'Por cateter central'},
-    {pt:3, tx:'Por SNG'},
-    {pt:2, tx:'Por boca com auxílio'},
-    {pt:1, tx:'Autossuficiente'}
+  { id:'f6', label:'Alimentação', ops:[
+    {pt:1, tx:'Auto-suficiente'},{pt:2, tx:'Necessita de auxílio'},
+    {pt:3, tx:'SNG/SNE'},{pt:4, tx:'NPT/Cateter central'}
   ]},
-  { id:'f7',  label:'Cuidado corporal', ops:[
-    {pt:4, tx:'Banho no leito e higiene oral pela enfermagem'},
-    {pt:3, tx:'Banho no chuveiro e higiene oral pela enfermagem'},
-    {pt:2, tx:'Auxílio no banho e/ou higiene oral'},
-    {pt:1, tx:'Autossuficiente'}
+  { id:'f7', label:'Cuidado corporal', ops:[
+    {pt:1, tx:'Auto-suficiente'},{pt:2, tx:'Auxílio no banho/higiene'},
+    {pt:3, tx:'Banho no leito com auxílio'},{pt:4, tx:'Banho no leito totalmente dependente'}
   ]},
-  { id:'f8',  label:'Eliminação', ops:[
-    {pt:4, tx:'Eliminação no leito e uso de SVD'},
-    {pt:3, tx:'Uso de comadre ou eliminação no leito'},
-    {pt:2, tx:'Uso de vaso sanitário com auxílio'},
-    {pt:1, tx:'Autossuficiente'}
+  { id:'f8', label:'Eliminação', ops:[
+    {pt:1, tx:'Auto-suficiente'},{pt:2, tx:'Uso de comadre/papagaio com auxílio'},
+    {pt:3, tx:'Uso de fralda/SVD'},{pt:4, tx:'Evacuação no leito/Incontinência'}
   ]},
-  { id:'f9',  label:'Terapêutica', ops:[
-    {pt:4, tx:'Uso de drogas vasoativas EV contínua'},
-    {pt:3, tx:'VO por SNG'},
-    {pt:2, tx:'EV intermitente'},
-    {pt:1, tx:'IM ou VO'}
+  { id:'f9', label:'Terapêutica', ops:[
+    {pt:1, tx:'VO ou IM'},{pt:2, tx:'EV intermitente'},
+    {pt:3, tx:'EV contínua'},{pt:4, tx:'EV contínua com drogas vasoativas'}
   ]},
   { id:'f10', label:'Comprometimento tecidual', ops:[
-    {pt:4, tx:'Até tendões/cápsulas, eviscerações'},
-    {pt:3, tx:'Tecido subcutâneo e músculo, incisão cirúrgica, ostomias, dreno'},
-    {pt:2, tx:'Alteração de cor (equimoses, hiperemia) e/ou epiderme/derme'},
-    {pt:1, tx:'Pele íntegra'}
+    {pt:1, tx:'Pele íntegra'},{pt:2, tx:'Alteração na pele/mucosa'},
+    {pt:3, tx:'Solução de continuidade'},{pt:4, tx:'Lesão extensa/múltiplas lesões'}
   ]},
   { id:'f11', label:'Curativo', ops:[
-    {pt:4, tx:'3 vezes ao dia ou mais'},
-    {pt:3, tx:'2 vezes ao dia'},
-    {pt:2, tx:'1 vez ao dia'},
-    {pt:1, tx:'Sem curativo'}
+    {pt:1, tx:'Sem curativo'},{pt:2, tx:'1 curativo simples'},
+    {pt:3, tx:'2 ou mais curativos simples'},{pt:4, tx:'Curativo complexo/extenso'}
   ]},
   { id:'f12', label:'Tempo de curativos', ops:[
-    {pt:4, tx:'Superior a 30 minutos'},
-    {pt:3, tx:'Entre 15 e 30 minutos'},
-    {pt:2, tx:'Entre 5 e 15 minutos'},
-    {pt:1, tx:'Sem curativo'}
+    {pt:1, tx:'Sem curativo'},{pt:2, tx:'< 15 min'},
+    {pt:3, tx:'15–30 min'},{pt:4, tx:'> 30 min'}
   ]}
 ];
 
-// ══════════════════════════════════════════════════════════════════════════════
-// ABRIR FORMULÁRIO
-// ══════════════════════════════════════════════════════════════════════════════
-async function abrirForm(leito){
-  leitoAtual = leito;
-  showLoading('Carregando evolução...');
-  try {
-    const d = await leitosData();
-    const l = d[leito];
-    const enf = enfermariaDoLeito(leito);
-
-    // Monta os checkboxes e escalas (só na primeira vez)
-    _montarCheckboxes();
-    _montarMedidasPrev();
-    _montarEscalas();
-
-    // Preenche identificação (readonly)
-    setF('f-pac', l.pac || '');
-    setF('f-leito', pad(leito));
-    setF('f-diag', (l.diag || '').toUpperCase());
-    setF('f-dn', l.dn || '');
-    setF('f-adm', l.adm || '');
-    setF('f-comor', (l.comor || '').toUpperCase());
-
-    // Calcula idade
-    if (l.dn) {
-      const [y,m,dd] = l.dn.split('-').map(Number);
-      const dn = new Date(y, m-1, dd);
-      const hj = new Date();
-      let idade = hj.getFullYear() - dn.getFullYear();
-      if (hj.getMonth() < dn.getMonth() || (hj.getMonth() === dn.getMonth() && hj.getDate() < dn.getDate())) idade--;
-      setF('f-idade', idade + ' anos');
-    } else setF('f-idade', '');
-
-    setF('f-data', hoje());
-    setF('f-alergia', (l.alergia || '').toUpperCase());
-
-    // Carrega evolução existente ou limpa campos
-    const ev = await dbGet(evKey(leito, turno, hoje()));
-    if (ev) {
-      _carregarDadosForm(ev);
-      toast('📄 Evolução deste turno carregada');
-    } else {
-      _limparCamposEditaveis();
-      await _herdarCamposAnterior(leito);
-    }
-
-    // Atualiza cabeçalho
-    document.getElementById('form-sub').textContent = `${enf.nome} · Leito ${pad(leito)} · ${turno === 'DIURNO' ? 'Diurno' : 'Noturno'} · ${fmtD(hoje())}`;
-    const b = document.getElementById('badge-form');
-    b.textContent = turno === 'DIURNO' ? '☀ DIURNO' : '☽ NOTURNO';
-    b.className = 'badge ' + (turno === 'DIURNO' ? 'badge-d' : 'badge-n');
-
-    _atualizarTotaisEscalas();
-    _ativarCaixaAltaForm();
-    mostrarTela('t-form');
-    window.scrollTo(0, 0);
-  } finally {
-    hideLoading();
-  }
-}
-
-function irForm(){ mostrarTela('t-form'); window.scrollTo(0,0); }
-
-// ── CONSTRUÇÃO DOS CAMPOS DINÂMICOS ──────────────────────────────────────────
+// ── BUILDERS ────────────────────────────────────────────────────────────────
 function _montarCheckboxes(){
   const m = (id, arr, prefix) => {
     const el = document.getElementById(id);
-    if (el.dataset.montado) return;
+    if (!el || el.dataset.montado) return;
     el.innerHTML = arr.map(item => {
       const key = prefix + '-' + item.replace(/[^a-zA-Z0-9]/g, '_');
-      return `<label><input type="checkbox" id="${key}"> ${item}</label>`;
+      return `<label class="ci"><input type="checkbox" id="${key}"> ${item}</label>`;
     }).join('');
     el.dataset.montado = '1';
   };
@@ -624,7 +496,7 @@ function _montarCheckboxes(){
 
 function _montarMedidasPrev(){
   const cont = document.getElementById('medidas-prev');
-  if (cont.dataset.montado) return;
+  if (!cont || cont.dataset.montado) return;
   cont.innerHTML = MEDIDAS_PREV.map(m => `
     <div class="medida-row">
       <span class="q">${esc(m.q)}</span>
@@ -638,14 +510,14 @@ function _montarMedidasPrev(){
 }
 
 function _montarEscalas(){
-  _montarEscala('braden-itens',  BRADEN_ITENS,  'brad',  _atualizarTotaisEscalas);
-  _montarEscala('morse-itens',   MORSE_ITENS,   'morse', _atualizarTotaisEscalas);
-  _montarEscala('fugulin-itens', FUGULIN_ITENS, 'fug',   _atualizarTotaisEscalas);
+  _montarEscala('braden-itens',  BRADEN_ITENS,  'brad');
+  _montarEscala('morse-itens',   MORSE_ITENS,   'morse');
+  _montarEscala('fugulin-itens', FUGULIN_ITENS, 'fug');
 }
 
-function _montarEscala(containerId, itens, prefix, onChange){
+function _montarEscala(containerId, itens, prefix){
   const cont = document.getElementById(containerId);
-  if (cont.dataset.montado) return;
+  if (!cont || cont.dataset.montado) return;
   cont.innerHTML = itens.map(item => `
     <div class="escala-item">
       <div class="escala-item-t">${esc(item.label)}<span class="vlr" id="${prefix}-v-${item.id}">–</span></div>
@@ -662,48 +534,41 @@ function _montarEscala(containerId, itens, prefix, onChange){
   cont.dataset.montado = '1';
 }
 
-// ── ATUALIZAÇÃO DE TOTAIS DAS ESCALAS ────────────────────────────────────────
+// ── ATUALIZAÇÃO DE TOTAIS ───────────────────────────────────────────────────
 function _atualizarTotaisEscalas(){
-  // Braden: soma 6 itens (de 1-4 cada = 3 a 23)
-  // Classificação: ≤11 = alto; 12-14 = moderado; 15-16 = baixo; >16 = sem risco
   const brad = _totalEscala(BRADEN_ITENS, 'brad');
-  let bLabel = 'Não avaliado', bClass = '';
+  let bLabel = 'Não avaliado';
   if (brad.total > 0 && brad.respondidos === BRADEN_ITENS.length) {
-    if (brad.total <= 11)       { bLabel = 'Risco ALTO';      bClass = 'a'; }
-    else if (brad.total <= 14)  { bLabel = 'Risco moderado';  bClass = 'm'; }
-    else if (brad.total <= 16)  { bLabel = 'Risco baixo';     bClass = 'b'; }
-    else                         { bLabel = 'Sem risco';       bClass = 'b'; }
+    if (brad.total <= 11)       bLabel = 'Risco ALTO';
+    else if (brad.total <= 14)  bLabel = 'Risco moderado';
+    else if (brad.total <= 16)  bLabel = 'Risco baixo';
+    else                         bLabel = 'Sem risco';
   }
   document.getElementById('brad-total').textContent = brad.total > 0 ? brad.total : '–';
   document.getElementById('brad-label').textContent = bLabel;
 
-  // Morse: 0-125 (alguns máx. 125 se tudo no máx.)
-  // 0-24 baixo; 25-44 moderado; ≥45 alto
   const morse = _totalEscala(MORSE_ITENS, 'morse');
-  let mLabel = 'Não avaliado', mClass = '';
+  let mLabel = 'Não avaliado';
   if (morse.respondidos === MORSE_ITENS.length) {
-    if (morse.total >= 45)      { mLabel = 'Risco ALTO';      mClass = 'a'; }
-    else if (morse.total >= 25) { mLabel = 'Risco moderado';  mClass = 'm'; }
-    else                         { mLabel = 'Risco baixo';     mClass = 'b'; }
+    if (morse.total >= 45)      mLabel = 'Risco ALTO';
+    else if (morse.total >= 25) mLabel = 'Risco moderado';
+    else                         mLabel = 'Risco baixo';
   }
-  document.getElementById('morse-total').textContent = morse.total >= 0 && morse.respondidos === MORSE_ITENS.length ? morse.total : '–';
+  document.getElementById('morse-total').textContent = morse.respondidos === MORSE_ITENS.length ? morse.total : '–';
   document.getElementById('morse-label').textContent = mLabel;
 
-  // Fugulin (12 itens × 1-4): total 12-48
-  // >34 Intensivo; 29-34 Semi-I; 23-28 Alta dep; 18-22 Interm; 12-17 Mín
   const fug = _totalEscala(FUGULIN_ITENS, 'fug');
-  let fLabel = 'Não avaliado', fClass = '';
+  let fLabel = 'Não avaliado';
   if (fug.respondidos === FUGULIN_ITENS.length) {
-    if (fug.total > 34)         { fLabel = 'Intensivo';        fClass = 'i'; }
-    else if (fug.total >= 29)   { fLabel = 'Semi-intensivo';   fClass = 'si'; }
-    else if (fug.total >= 23)   { fLabel = 'Alta dependência'; fClass = 'ad'; }
-    else if (fug.total >= 18)   { fLabel = 'Intermediário';    fClass = 'itm'; }
-    else                         { fLabel = 'Cuidado mínimo';   fClass = 'cm'; }
+    if (fug.total > 34)         fLabel = 'Intensivo';
+    else if (fug.total >= 29)   fLabel = 'Semi-intensivo';
+    else if (fug.total >= 23)   fLabel = 'Alta dependência';
+    else if (fug.total >= 18)   fLabel = 'Intermediário';
+    else                         fLabel = 'Cuidado mínimo';
   }
   document.getElementById('fug-total').textContent = fug.respondidos === FUGULIN_ITENS.length ? fug.total : '–';
   document.getElementById('fug-label').textContent = fLabel;
 
-  // Marca visual do item selecionado
   document.querySelectorAll('.escala-op').forEach(l => {
     l.classList.toggle('sel', l.querySelector('input').checked);
   });
@@ -713,7 +578,6 @@ function _totalEscala(itens, prefix){
   let total = 0, respondidos = 0;
   for (const item of itens) {
     const r = document.querySelector(`input[name="${prefix}-${item.id}"]:checked`);
-    // Atualiza display individual
     const vlr = document.getElementById(`${prefix}-v-${item.id}`);
     if (r) {
       const pt = parseInt(r.value);
@@ -726,7 +590,7 @@ function _totalEscala(itens, prefix){
   return { total, respondidos };
 }
 
-// ── ATB ──────────────────────────────────────────────────────────────────────
+// ── ATB ─────────────────────────────────────────────────────────────────────
 function addAtb(nome='', dias=''){
   const cont = document.getElementById('f-atb-list');
   const row = document.createElement('div');
@@ -739,6 +603,67 @@ function addAtb(nome='', dias=''){
   `;
   cont.appendChild(row);
   _ativarCaixaAltaEm(row);
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ABRIR FORMULÁRIO DE EVOLUÇÃO
+// ══════════════════════════════════════════════════════════════════════════════
+async function abrirForm(num){
+  leitoAtual = num;
+  showLoading('Carregando evolução...');
+  try {
+    const dl = await leitosData();
+    const pac = dl[num];
+    const enf = enfermariaDoLeito(num);
+
+    // Garante que builders foram montados
+    _montarCheckboxes();
+    _montarMedidasPrev();
+    _montarEscalas();
+
+    // Limpa
+    _limparCamposEditaveis();
+    document.getElementById('f-atb-list').innerHTML = '';
+
+    // Cabeçalho do formulário
+    document.getElementById('form-titulo').textContent = `Evolução – ${enf.nome} · Leito ${pad(num)}`;
+    document.getElementById('form-sub').textContent = `Hospital dos Pescadores · Clínica Médica · ${pac.pac || ''}`;
+    const b = document.getElementById('badge-form');
+    b.textContent = turno === 'DIURNO' ? '☀ DIURNO' : '☽ NOTURNO';
+    b.className = 'badge ' + (turno === 'DIURNO' ? 'badge-d' : 'badge-n');
+
+    // Identificação (vem do leito — readonly)
+    setF('f-pac',      pac.pac || '');
+    setF('f-leito',    `Leito ${pad(num)} – ${enf.nome}`);
+    setF('f-data',     hoje());
+    setF('f-dn',       pac.dn || '');
+    setF('f-idade',    calcIdade(pac.dn));
+    setF('f-diag',     pac.diag || '');
+    setF('f-adm',      pac.adm || '');
+    setF('f-adm-hosp', pac.admHosp || '');
+    setF('f-comor',    pac.comor || '');
+    setF('f-alergia',  pac.alergia || '');
+
+    // Tenta carregar evolução de hoje (deste turno) primeiro
+    const evHoje = await dbGet(evKey(num, turno, hoje()));
+    document.getElementById('cloud-tag').style.display = (!modoOffline && evHoje) ? 'inline' : 'none';
+
+    if (evHoje) {
+      _carregarDadosForm(evHoje);
+      document.getElementById('herd-tag').style.display = 'none';
+    } else {
+      // Sem evolução deste turno → tenta herdar do turno anterior
+      await _herdarCamposAnterior(num);
+    }
+
+    _atualizarTotaisEscalas();
+
+    mostrarTela('t-form');
+    _ativarCaixaAlta();
+    window.scrollTo(0,0);
+  } finally {
+    hideLoading();
+  }
 }
 
 // ── LIMPEZA DE CAMPOS ────────────────────────────────────────────────────────
@@ -756,20 +681,15 @@ function _limparCamposEditaveis(){
     'f-ssvv-m','f-ssvv-t','f-ssvv-n','f-info','f-obs','f-glas'
   ];
   textIds.forEach(id => setF(id, ''));
-
-  // Checkboxes
   document.querySelectorAll('#t-form input[type="checkbox"]').forEach(cb => cb.checked = false);
-  // Radios
   document.querySelectorAll('#t-form input[type="radio"]').forEach(r => r.checked = false);
-  // Selects
   ['f-pulseira','f-vni-tipo','f-avc-curat','f-drt-lado','f-sne-tipo'].forEach(id => setF(id, ''));
-  // ATB
   document.getElementById('f-atb-list').innerHTML = '';
+  document.getElementById('herd-tag').style.display = 'none';
 }
 
-// ── HERANÇA DE CAMPOS ENTRE TURNOS ───────────────────────────────────────────
+// ── HERANÇA DE CAMPOS ENTRE TURNOS ──────────────────────────────────────────
 async function _herdarCamposAnterior(leito){
-  // Busca evolução anterior (outro turno de hoje OU último turno de ontem)
   const outro = turno === 'DIURNO' ? 'NOTURNO' : 'DIURNO';
   let ev = await dbGet(evKey(leito, outro, hoje()));
   if (!ev) {
@@ -780,8 +700,6 @@ async function _herdarCamposAnterior(leito){
   }
   if (!ev) return;
 
-  // Herda: isolamento, pupilas, ventilação, dispositivos, ATBs, medidas preventivas, escalas
-  // NÃO herda: SSVV, observações, lesões, exames
   if (ev.iso)       _marcaRadio('iso', ev.iso);
   if (ev.microorg)  setF('f-microorg', ev.microorg);
   if (ev.pupilas)   (ev.pupilas || []).forEach(v => _marcaCheck('pup-' + v.replace(/[^a-zA-Z0-9]/g, '_'), true));
@@ -792,44 +710,39 @@ async function _herdarCamposAnterior(leito){
     if (ev.ventExtra.mnrLmin) setF('f-mnr-lmin', ev.ventExtra.mnrLmin);
     if (ev.ventExtra.vniTipo) setF('f-vni-tipo', ev.ventExtra.vniTipo);
   }
-  // Dispositivos
   if (ev.dispositivos) {
     const disp = ev.dispositivos;
     ['avp','avc','cdl','drt','sne','cisto','svd2','outro'].forEach(k => {
-      if (disp[k] && disp[k].marcado) document.getElementById('d-' + k).checked = true;
+      if (disp[k] && disp[k].marcado) {
+        const cb = document.getElementById('d-' + k);
+        if (cb) cb.checked = true;
+      }
     });
-    if (disp.avp)  { setF('f-avp-local', disp.avp.local); setF('f-avp-data', disp.avp.data); }
-    if (disp.avc)  { setF('f-avc-local', disp.avc.local); setF('f-avc-curat', disp.avc.curat); setF('f-avc-data', disp.avc.data); }
-    if (disp.cdl)  { setF('f-cdl-local', disp.cdl.local); setF('f-cdl-data', disp.cdl.data); }
-    if (disp.drt)  { setF('f-drt-lado', disp.drt.lado); setF('f-drt-ins', disp.drt.ins); }
-    if (disp.sne)  { setF('f-sne-tipo', disp.sne.tipo); setF('f-sne-data', disp.sne.data); }
-    if (disp.cisto){ setF('f-cisto-data', disp.cisto.data); }
-    if (disp.svd2) { setF('f-svd2-data', disp.svd2.data); }
-    if (disp.outro){ setF('f-disp-outro', disp.outro.desc); }
+    if (disp.avp)   { setF('f-avp-local', disp.avp.local); setF('f-avp-data', disp.avp.data); }
+    if (disp.avc)   { setF('f-avc-local', disp.avc.local); setF('f-avc-curat', disp.avc.curat); setF('f-avc-data', disp.avc.data); }
+    if (disp.cdl)   { setF('f-cdl-local', disp.cdl.local); setF('f-cdl-data', disp.cdl.data); }
+    if (disp.drt)   { setF('f-drt-lado', disp.drt.lado); setF('f-drt-ins', disp.drt.ins); }
+    if (disp.sne)   { setF('f-sne-tipo', disp.sne.tipo); setF('f-sne-data', disp.sne.data); }
+    if (disp.cisto) { setF('f-cisto-data', disp.cisto.data); }
+    if (disp.svd2)  { setF('f-svd2-data', disp.svd2.data); }
+    if (disp.outro) { setF('f-disp-outro', disp.outro.desc); }
   }
-  // ATBs
   (ev.atbs || []).forEach(a => { if (a.nome) addAtb(a.nome, a.dias); });
-  // Dieta
   if (ev.dieta) _marcaRadio('dieta', ev.dieta);
-  // Hidratação venosa
-  if (ev.hv) _marcaRadio('hv', ev.hv);
-  // SVD instalada
+  if (ev.hv != null) _marcaRadio('hv', ev.hv);
   if (ev.svdInstaladaEm) setF('f-svd-data', ev.svdInstaladaEm);
-  // Medidas preventivas
   if (ev.medidasPrev) {
     Object.entries(ev.medidasPrev).forEach(([k, v]) => {
       const r = document.querySelector(`input[name="${k}"][value="${v}"]`);
       if (r) r.checked = true;
     });
   }
-  // Escalas
   _aplicarEscala(BRADEN_ITENS, 'brad',  ev.braden);
   _aplicarEscala(MORSE_ITENS,  'morse', ev.morse);
   _aplicarEscala(FUGULIN_ITENS,'fug',   ev.fugulin);
-  // Pulseira
   if (ev.pulseira) setF('f-pulseira', ev.pulseira);
-  // Alergia já vem do cabeçalho (readonly)
 
+  document.getElementById('herd-tag').style.display = 'inline';
   toast('↻ Campos herdados do turno anterior');
 }
 
@@ -852,7 +765,7 @@ function _aplicarEscala(itens, prefix, dados){
   }
 }
 
-// ── COLETA DE DADOS ──────────────────────────────────────────────────────────
+// ── COLETA DE DADOS ─────────────────────────────────────────────────────────
 function _coletarDados(){
   const getChks = (arr, prefix) => arr.filter(v => {
     const id = prefix + '-' + v.replace(/[^a-zA-Z0-9]/g, '_');
@@ -860,14 +773,12 @@ function _coletarDados(){
   });
   const getRadio = name => document.querySelector(`input[name="${name}"]:checked`)?.value || '';
 
-  // Medidas preventivas
   const medidasPrev = {};
   MEDIDAS_PREV.forEach(m => {
     const v = document.querySelector(`input[name="${m.id}"]:checked`);
     if (v) medidasPrev[m.id] = v.value;
   });
 
-  // Escalas
   const coletarEscala = (itens, prefix) => {
     const dados = {};
     for (const item of itens) {
@@ -880,7 +791,6 @@ function _coletarDados(){
   const morse   = coletarEscala(MORSE_ITENS,   'morse');
   const fugulin = coletarEscala(FUGULIN_ITENS, 'fug');
 
-  // Totais e classes (para badges no painel)
   const bradT = Object.values(braden).reduce((s,v)=>s+v,0);
   const brespondidos = Object.keys(braden).length;
   let bradClass = '', bradLabel = '';
@@ -908,7 +818,6 @@ function _coletarDados(){
     else                    { fugClass = 'cm';  fugLabel = 'CM'; }
   }
 
-  // ATBs
   const atbs = [];
   document.querySelectorAll('#f-atb-list .atb-row').forEach(row => {
     const nome = row.querySelector('input[type="text"]').value.trim();
@@ -916,7 +825,6 @@ function _coletarDados(){
     if (nome) atbs.push({ nome, dias });
   });
 
-  // Dispositivos
   const dispositivos = {
     avp:   { marcado:document.getElementById('d-avp').checked,   local:gf('f-avp-local'), data:gf('f-avp-data') },
     avc:   { marcado:document.getElementById('d-avc').checked,   local:gf('f-avc-local'), curat:gf('f-avc-curat'), data:gf('f-avc-data') },
@@ -929,42 +837,23 @@ function _coletarDados(){
   };
 
   return {
-    leito: leitoAtual,
-    turno,
+    leito: leitoAtual, turno,
     data: gf('f-data'),
-    pac: gf('f-pac'),
-    diag: gf('f-diag'),
-    dn: gf('f-dn'),
-    idade: gf('f-idade'),
-    adm: gf('f-adm'),
-    comor: gf('f-comor'),
-    alergia: gf('f-alergia'),
-    pulseira: gf('f-pulseira'),
-    iso: getRadio('iso'),
-    microorg: gf('f-microorg'),
-    pele: getChks(CHK_PELE, 'pele'),
-    peleOutros: gf('f-pele-outros'),
-    neuro: getChks(CHK_NEURO, 'neuro'),
-    glas: gf('f-glas'),
-    reducao: gf('f-reducao'),
+    pac: gf('f-pac'), diag: gf('f-diag'), dn: gf('f-dn'), idade: gf('f-idade'),
+    adm: gf('f-adm'), admHosp: gf('f-adm-hosp'),
+    comor: gf('f-comor'), alergia: gf('f-alergia'), pulseira: gf('f-pulseira'),
+    iso: getRadio('iso'), microorg: gf('f-microorg'),
+    pele: getChks(CHK_PELE, 'pele'), peleOutros: gf('f-pele-outros'),
+    neuro: getChks(CHK_NEURO, 'neuro'), glas: gf('f-glas'), reducao: gf('f-reducao'),
     pupilas: getChks(CHK_PUPILAS, 'pup'),
     torax: getChks(CHK_TORAX, 'tor'),
-    ap: getChks(CHK_AP, 'ap'),
-    apOutros: gf('f-ap-outros'),
+    ap: getChks(CHK_AP, 'ap'), apOutros: gf('f-ap-outros'),
     vent: getRadio('vent'),
-    ventExtra: {
-      cnLmin:  gf('f-cn-lmin'),
-      mvFio2:  gf('f-mv-fio2'),
-      mnrLmin: gf('f-mnr-lmin'),
-      vniTipo: gf('f-vni-tipo')
-    },
+    ventExtra: { cnLmin:gf('f-cn-lmin'), mvFio2:gf('f-mv-fio2'), mnrLmin:gf('f-mnr-lmin'), vniTipo:gf('f-vni-tipo') },
     cv: getChks(CHK_CV, 'cv'),
     abd: getChks(CHK_ABD, 'abd'),
     dieta: getRadio('dieta'),
-    dietaVaz: {
-      sne: gf('f-sne-vaz'), soe: gf('f-soe-vaz'),
-      sng: gf('f-sng-vaz'), npt: gf('f-npt-vaz'), gtm: gf('f-gtm-vaz')
-    },
+    dietaVaz: { sne:gf('f-sne-vaz'), soe:gf('f-soe-vaz'), sng:gf('f-sng-vaz'), npt:gf('f-npt-vaz'), gtm:gf('f-gtm-vaz') },
     diurese: getChks(CHK_DIURESE, 'diu'),
     svdInstaladaEm: gf('f-svd-data'),
     diureseMl: { m:gf('f-diur-m'), t:gf('f-diur-t'), n:gf('f-diur-n') },
@@ -976,19 +865,13 @@ function _coletarDados(){
     eletrolitos: gf('f-eletr'),
     medidasPrev,
     lesoes: gf('f-lesoes'),
-    exFeitos: gf('f-ex-feitos'),
-    exSol: gf('f-ex-sol'),
-    nir: gf('f-nir'),
-    exPrep: gf('f-ex-prep'),
+    exFeitos: gf('f-ex-feitos'), exSol: gf('f-ex-sol'),
+    nir: gf('f-nir'), exPrep: gf('f-ex-prep'),
     ssvv: { m:gf('f-ssvv-m'), t:gf('f-ssvv-t'), n:gf('f-ssvv-n') },
-    info: gf('f-info'),
-    obs: gf('f-obs'),
-
-    // Escalas
+    info: gf('f-info'), obs: gf('f-obs'),
     braden, bradTotal: bradT, bradClass, bradLabel,
     morse,  morseTotal: morseT, morseClass, morseLabel,
-    fugulin,fugTotal: fugT, fugClass, fugLabel,
-
+    fugulin, fugTotal: fugT, fugClass, fugLabel,
     autor: usuarioEmail,
     criadoEm: new Date().toISOString()
   };
@@ -996,51 +879,46 @@ function _coletarDados(){
 
 function _carregarDadosForm(d){
   setF('f-data', d.data || hoje());
-  setF('f-alergia', d.alergia || '');
   setF('f-pulseira', d.pulseira || '');
 
   if (d.iso) _marcaRadio('iso', d.iso);
   setF('f-microorg', d.microorg || '');
 
   (d.pele    || []).forEach(v => _marcaCheck('pele-'  + v.replace(/[^a-zA-Z0-9]/g, '_'), true));
+  setF('f-pele-outros', d.peleOutros || '');
   (d.neuro   || []).forEach(v => _marcaCheck('neuro-' + v.replace(/[^a-zA-Z0-9]/g, '_'), true));
+  setF('f-glas', d.glas || ''); setF('f-reducao', d.reducao || '');
   (d.pupilas || []).forEach(v => _marcaCheck('pup-'   + v.replace(/[^a-zA-Z0-9]/g, '_'), true));
   (d.torax   || []).forEach(v => _marcaCheck('tor-'   + v.replace(/[^a-zA-Z0-9]/g, '_'), true));
   (d.ap      || []).forEach(v => _marcaCheck('ap-'    + v.replace(/[^a-zA-Z0-9]/g, '_'), true));
-  (d.cv      || []).forEach(v => _marcaCheck('cv-'    + v.replace(/[^a-zA-Z0-9]/g, '_'), true));
-  (d.abd     || []).forEach(v => _marcaCheck('abd-'   + v.replace(/[^a-zA-Z0-9]/g, '_'), true));
-  (d.diurese || []).forEach(v => _marcaCheck('diu-'   + v.replace(/[^a-zA-Z0-9]/g, '_'), true));
-  (d.intest  || []).forEach(v => _marcaCheck('int-'   + v.replace(/[^a-zA-Z0-9]/g, '_'), true));
-
-  setF('f-pele-outros', d.peleOutros);
-  setF('f-glas', d.glas);
-  setF('f-reducao', d.reducao);
-  setF('f-ap-outros', d.apOutros);
-
+  setF('f-ap-outros', d.apOutros || '');
   if (d.vent) _marcaRadio('vent', d.vent);
   if (d.ventExtra) {
-    setF('f-cn-lmin',  d.ventExtra.cnLmin);
-    setF('f-mv-fio2',  d.ventExtra.mvFio2);
-    setF('f-mnr-lmin', d.ventExtra.mnrLmin);
-    setF('f-vni-tipo', d.ventExtra.vniTipo);
+    setF('f-cn-lmin',  d.ventExtra.cnLmin || '');
+    setF('f-mv-fio2',  d.ventExtra.mvFio2 || '');
+    setF('f-mnr-lmin', d.ventExtra.mnrLmin || '');
+    setF('f-vni-tipo', d.ventExtra.vniTipo || '');
   }
-
+  (d.cv  || []).forEach(v => _marcaCheck('cv-'  + v.replace(/[^a-zA-Z0-9]/g, '_'), true));
+  (d.abd || []).forEach(v => _marcaCheck('abd-' + v.replace(/[^a-zA-Z0-9]/g, '_'), true));
   if (d.dieta) _marcaRadio('dieta', d.dieta);
   if (d.dietaVaz) {
-    setF('f-sne-vaz', d.dietaVaz.sne); setF('f-soe-vaz', d.dietaVaz.soe);
-    setF('f-sng-vaz', d.dietaVaz.sng); setF('f-npt-vaz', d.dietaVaz.npt);
-    setF('f-gtm-vaz', d.dietaVaz.gtm);
+    setF('f-sne-vaz', d.dietaVaz.sne || '');
+    setF('f-soe-vaz', d.dietaVaz.soe || '');
+    setF('f-sng-vaz', d.dietaVaz.sng || '');
+    setF('f-npt-vaz', d.dietaVaz.npt || '');
+    setF('f-gtm-vaz', d.dietaVaz.gtm || '');
   }
-
-  setF('f-svd-data', d.svdInstaladaEm);
-  if (d.diureseMl) {
-    setF('f-diur-m', d.diureseMl.m); setF('f-diur-t', d.diureseMl.t); setF('f-diur-n', d.diureseMl.n);
-  }
+  (d.diurese || []).forEach(v => _marcaCheck('diu-' + v.replace(/[^a-zA-Z0-9]/g, '_'), true));
+  setF('f-svd-data', d.svdInstaladaEm || '');
+  if (d.diureseMl) { setF('f-diur-m', d.diureseMl.m||''); setF('f-diur-t', d.diureseMl.t||''); setF('f-diur-n', d.diureseMl.n||''); }
+  (d.intest || []).forEach(v => _marcaCheck('int-' + v.replace(/[^a-zA-Z0-9]/g, '_'), true));
 
   if (d.dispositivos) {
     const disp = d.dispositivos;
     ['avp','avc','cdl','drt','sne','cisto','svd2','outro'].forEach(k => {
-      document.getElementById('d-' + k).checked = !!(disp[k] && disp[k].marcado);
+      const cb = document.getElementById('d-' + k);
+      if (cb && disp[k] && disp[k].marcado) cb.checked = true;
     });
     if (disp.avp)   { setF('f-avp-local', disp.avp.local); setF('f-avp-data', disp.avp.data); }
     if (disp.avc)   { setF('f-avc-local', disp.avc.local); setF('f-avc-curat', disp.avc.curat); setF('f-avc-data', disp.avc.data); }
@@ -1052,209 +930,169 @@ function _carregarDadosForm(d){
     if (disp.outro) { setF('f-disp-outro', disp.outro.desc); }
   }
 
-  if (d.hv) _marcaRadio('hv', d.hv);
-  if (d.hvVol) { setF('f-hv-m', d.hvVol.m); setF('f-hv-t', d.hvVol.t); setF('f-hv-n', d.hvVol.n); }
+  if (d.hv != null) _marcaRadio('hv', d.hv);
+  if (d.hvVol) { setF('f-hv-m', d.hvVol.m||''); setF('f-hv-t', d.hvVol.t||''); setF('f-hv-n', d.hvVol.n||''); }
 
   document.getElementById('f-atb-list').innerHTML = '';
-  (d.atbs || []).forEach(a => addAtb(a.nome, a.dias));
+  (d.atbs || []).forEach(a => { if (a.nome) addAtb(a.nome, a.dias); });
 
-  setF('f-eletr', d.eletrolitos);
-  setF('f-lesoes', d.lesoes);
-  setF('f-ex-feitos', d.exFeitos);
-  setF('f-ex-sol', d.exSol);
-  setF('f-nir', d.nir);
-  setF('f-ex-prep', d.exPrep);
-  if (d.ssvv) { setF('f-ssvv-m', d.ssvv.m); setF('f-ssvv-t', d.ssvv.t); setF('f-ssvv-n', d.ssvv.n); }
-  setF('f-info', d.info);
-  setF('f-obs', d.obs);
+  setF('f-eletr', d.eletrolitos || '');
 
   if (d.medidasPrev) {
-    Object.entries(d.medidasPrev).forEach(([k,v]) => {
+    Object.entries(d.medidasPrev).forEach(([k, v]) => {
       const r = document.querySelector(`input[name="${k}"][value="${v}"]`);
       if (r) r.checked = true;
     });
   }
 
+  setF('f-lesoes',   d.lesoes   || '');
+  setF('f-ex-feitos',d.exFeitos || '');
+  setF('f-ex-sol',   d.exSol    || '');
+  setF('f-nir',      d.nir      || '');
+  setF('f-ex-prep',  d.exPrep   || '');
+
+  if (d.ssvv) { setF('f-ssvv-m', d.ssvv.m||''); setF('f-ssvv-t', d.ssvv.t||''); setF('f-ssvv-n', d.ssvv.n||''); }
+  setF('f-info', d.info || '');
+  setF('f-obs',  d.obs  || '');
+
   _aplicarEscala(BRADEN_ITENS, 'brad',  d.braden);
   _aplicarEscala(MORSE_ITENS,  'morse', d.morse);
   _aplicarEscala(FUGULIN_ITENS,'fug',   d.fugulin);
-  _atualizarTotaisEscalas();
-}
-
-// ── CAIXA ALTA ───────────────────────────────────────────────────────────────
-function _ativarCaixaAltaForm(){
-  document.querySelectorAll('#t-form input[type="text"], #t-form textarea').forEach(el => {
-    if (el.dataset.ca === '1') return;
-    el.dataset.ca = '1';
-    if (el.readOnly) return;
-    // Sugere ao teclado mobile que mostre maiúsculas
-    el.setAttribute('autocapitalize', 'characters');
-    // Converte só ao perder foco (não atrapalha autocorrect/autocomplete do mobile)
-    el.addEventListener('blur', () => {
-      if (el.readOnly) return;
-      const up = el.value.toUpperCase();
-      if (el.value !== up) el.value = up;
-    });
-  });
-}
-function _ativarCaixaAltaEm(container){
-  container.querySelectorAll('input[type="text"], textarea').forEach(el => {
-    if (el.dataset.ca === '1') return;
-    el.dataset.ca = '1';
-    if (el.readOnly) return;
-    el.setAttribute('autocapitalize', 'characters');
-    el.addEventListener('blur', () => {
-      if (el.readOnly) return;
-      const up = el.value.toUpperCase();
-      if (el.value !== up) el.value = up;
-    });
-  });
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// PREVIEW + PDF
+// PRÉ-VISUALIZAÇÃO
 // ══════════════════════════════════════════════════════════════════════════════
 async function gerarPreview(){
   const d = _coletarDados();
-  if (!d.pac) { toast('Paciente não identificado', true); return; }
+  if (!d.pac.trim()) { toast('Identifique o paciente primeiro', true); return; }
 
-  showLoading('Salvando...');
-  try {
-    const key = evKey(leitoAtual, turno, hoje());
-    await dbSet(key, d);
-    memDel(key); // invalida para que renderLeitos releia no retorno
-  }
-  catch(e){ console.error('salvar:', e); toast('Erro ao salvar', true); }
-  finally { hideLoading(); }
+  // Salva no banco (Firestore + localStorage + memCache)
+  const key = evKey(leitoAtual, turno, d.data || hoje());
+  await dbSet(key, d);
+  memDel(key); // força refresh para mostrar badges no painel
 
+  toast('✓ Evolução salva');
   _renderPreview(d);
-  const b = document.getElementById('badge-prev');
-  b.textContent = turno === 'DIURNO' ? '☀ DIURNO' : '☽ NOTURNO';
-  b.className = 'badge ' + (turno === 'DIURNO' ? 'badge-d' : 'badge-n');
+
+  // Atualiza cabeçalho do preview
   const enf = enfermariaDoLeito(leitoAtual);
-  document.getElementById('prev-sub').textContent = `${enf.nome} · Leito ${pad(leitoAtual)} · ${fmtD(hoje())}`;
+  document.getElementById('prev-sub').textContent = `${enf.nome} · Leito ${pad(leitoAtual)} · ${turno}`;
+  const bp = document.getElementById('badge-prev');
+  bp.textContent = turno === 'DIURNO' ? '☀ DIURNO' : '☽ NOTURNO';
+  bp.className = 'badge ' + (turno === 'DIURNO' ? 'badge-d' : 'badge-n');
+  document.getElementById('pdf-status').textContent = '';
+
   mostrarTela('t-prev');
-  window.scrollTo(0, 0);
+  window.scrollTo(0,0);
 }
 
 function _renderPreview(d){
-  const area = document.getElementById('preview-area');
-  const listaCheck = arr => arr && arr.length ? arr.map(x => `<span>${esc(x)}</span>`).join('') : '<span>—</span>';
+  const enf = enfermariaDoLeito(leitoAtual);
+  const tipoTurno = turno === 'DIURNO' ? 'DIURNO (07h–19h)' : 'NOTURNO (19h–07h)';
 
-  // Texto da ventilação
-  let ventText = d.vent || '—';
-  if (d.vent === 'CN' && d.ventExtra?.cnLmin) ventText = `CN ${d.ventExtra.cnLmin} L/min`;
-  else if (d.vent === 'MV' && d.ventExtra?.mvFio2) ventText = `MV ${d.ventExtra.mvFio2}%`;
-  else if (d.vent === 'Mascara NR') ventText = `Máscara NR${d.ventExtra?.mnrLmin?' '+d.ventExtra.mnrLmin+' L/min':''}`;
-  else if (d.vent === 'VNI' && d.ventExtra?.vniTipo) ventText = `VNI (${d.ventExtra.vniTipo})`;
-
-  // Dieta
-  let dietaText = d.dieta || '—';
-  if (d.dieta === 'SNE' && d.dietaVaz?.sne) dietaText = `SNE – vazão ${d.dietaVaz.sne}`;
-  else if (d.dieta === 'SOE' && d.dietaVaz?.soe) dietaText = `SOE – vazão ${d.dietaVaz.soe}`;
-  else if (d.dieta === 'SNG' && d.dietaVaz?.sng) dietaText = `SNG – vazão ${d.dietaVaz.sng}`;
-  else if (d.dieta === 'NPT' && d.dietaVaz?.npt) dietaText = `NPT – vazão ${d.dietaVaz.npt}`;
-  else if (d.dieta === 'GTM' && d.dietaVaz?.gtm) dietaText = `GTM – vazão ${d.dietaVaz.gtm}`;
-
-  // Dispositivos
-  const disp = d.dispositivos || {};
+  // Helpers
+  const listaCheck = arr => (arr && arr.length) ? arr.join(', ') : '—';
+  const ventText = (() => {
+    if (!d.vent) return '—';
+    if (d.vent === 'Cateter nasal' && d.ventExtra?.cnLmin) return `${d.vent} ${d.ventExtra.cnLmin} L/min`;
+    if (d.vent === 'Macronebulização' && d.ventExtra?.mvFio2) return `${d.vent} FiO₂ ${d.ventExtra.mvFio2}%`;
+    if (d.vent === 'Máscara NR' && d.ventExtra?.mnrLmin) return `${d.vent} ${d.ventExtra.mnrLmin} L/min`;
+    if (d.vent === 'VNI' && d.ventExtra?.vniTipo) return `${d.vent} (${d.ventExtra.vniTipo})`;
+    return d.vent;
+  })();
+  const dietaText = (() => {
+    if (!d.dieta) return '—';
+    const v = d.dietaVaz || {};
+    const tipo = d.dieta;
+    const k = tipo.toLowerCase();
+    const vaz = v[k];
+    return vaz ? `${tipo} – vazão ${vaz}` : tipo;
+  })();
+  const hvText = (() => {
+    if (!d.hv) return 'Nenhuma';
+    const v = d.hvVol || {};
+    const partes = [];
+    if (v.m) partes.push(`M ${v.m}`);
+    if (v.t) partes.push(`T ${v.t}`);
+    if (v.n) partes.push(`N ${v.n}`);
+    return partes.length ? `${d.hv} – ${partes.join(' / ')} ml/h` : d.hv;
+  })();
   const dispList = [];
-  if (disp.avp?.marcado)   dispList.push(`AVP${disp.avp.local?' ('+disp.avp.local+')':''}${disp.avp.data?' – inst '+fmtD(disp.avp.data):''}`);
-  if (disp.avc?.marcado)   dispList.push(`AVC${disp.avc.local?' ('+disp.avc.local+')':''}${disp.avc.curat?' – '+disp.avc.curat:''}${disp.avc.data?' – '+fmtD(disp.avc.data):''}`);
-  if (disp.cdl?.marcado)   dispList.push(`CDL/HD${disp.cdl.local?' ('+disp.cdl.local+')':''}${disp.cdl.data?' – '+fmtD(disp.cdl.data):''}`);
-  if (disp.drt?.marcado)   dispList.push(`Dreno tórax ${disp.drt.lado||''}${disp.drt.ins?' – inserção '+fmtD(disp.drt.ins):''}${disp.drt.deb?' – débito 6h: '+disp.drt.deb:''}`);
-  if (disp.sne?.marcado)   dispList.push(`${disp.sne.tipo||'SNE/SNG'}${disp.sne.data?' – inserção '+fmtD(disp.sne.data):''}`);
-  if (disp.cisto?.marcado) dispList.push(`Cistostomia${disp.cisto.data?' – '+fmtD(disp.cisto.data):''}`);
-  if (disp.svd2?.marcado)  dispList.push(`SVD${disp.svd2.data?' – '+fmtD(disp.svd2.data):''}`);
-  if (disp.outro?.marcado) dispList.push(`Outro: ${disp.outro.desc||''}`);
-
-  // ATBs
-  const atbList = (d.atbs||[]).map(a => `${a.nome}${a.dias?' / D'+a.dias:''}`);
-
-  // Medidas preventivas
-  const medList = MEDIDAS_PREV.map(m => {
-    const v = d.medidasPrev?.[m.id];
-    if (!v) return null;
-    return `${m.q} <strong>${v}</strong>`;
-  }).filter(Boolean);
-
-  // HV
-  let hvText = d.hv || 'Nenhuma';
-  if (d.hvVol && (d.hvVol.m || d.hvVol.t || d.hvVol.n)) {
-    const p = [];
-    if (d.hvVol.m) p.push('M ' + d.hvVol.m);
-    if (d.hvVol.t) p.push('T ' + d.hvVol.t);
-    if (d.hvVol.n) p.push('N ' + d.hvVol.n);
-    hvText += ' — ' + p.join(' / ') + ' ml/h';
+  if (d.dispositivos) {
+    const dp = d.dispositivos;
+    if (dp.avp?.marcado)   dispList.push(`AVP${dp.avp.local?` (${dp.avp.local})`:''}${dp.avp.data?` – inst. ${fmtD(dp.avp.data)}`:''}`);
+    if (dp.avc?.marcado)   dispList.push(`AVC${dp.avc.local?` (${dp.avc.local})`:''}${dp.avc.curat?` – ${dp.avc.curat}`:''}${dp.avc.data?` – inst. ${fmtD(dp.avc.data)}`:''}`);
+    if (dp.cdl?.marcado)   dispList.push(`CDL/HD${dp.cdl.local?` (${dp.cdl.local})`:''}${dp.cdl.data?` – inst. ${fmtD(dp.cdl.data)}`:''}`);
+    if (dp.drt?.marcado)   dispList.push(`Dreno tórax${dp.drt.lado?` ${dp.drt.lado}`:''}${dp.drt.ins?` – inst. ${fmtD(dp.drt.ins)}`:''}${dp.drt.deb?` – débito 6h: ${dp.drt.deb}`:''}`);
+    if (dp.sne?.marcado)   dispList.push(`${dp.sne.tipo||'SNE/SNG'}${dp.sne.data?` – inst. ${fmtD(dp.sne.data)}`:''}`);
+    if (dp.cisto?.marcado) dispList.push(`Cistostomia${dp.cisto.data?` – inst. ${fmtD(dp.cisto.data)}`:''}`);
+    if (dp.svd2?.marcado)  dispList.push(`SVD${dp.svd2.data?` – inst. ${fmtD(dp.svd2.data)}`:''}`);
+    if (dp.outro?.marcado) dispList.push(dp.outro.desc || 'Outro dispositivo');
   }
+  const atbList = (d.atbs || []).filter(a=>a.nome).map(a => `${a.nome}${a.dias?` (D${a.dias})`:''}`);
+  const medList = [];
+  if (d.medidasPrev) {
+    const labels = {
+      'mp-tev':'Profilaxia TEV','mp-grades':'Grades','mp-cont':'Contenção mecânica',
+      'mp-cont-tr':'Contenção trocada hoje','mp-cont-ok':'Contenção sem garrotear',
+      'mp-colch':'Colchão de ar','mp-cab':'Cabeceira 30°','mp-higi':'Higiene oral'
+    };
+    Object.entries(d.medidasPrev).forEach(([k,v])=>{
+      if (labels[k]) medList.push(`${labels[k]}: ${v}`);
+    });
+  }
+  const bradCls  = d.bradLabel ? `${d.bradTotal||'—'} – ${d.bradLabel === 'alto' ? 'Risco ALTO' : d.bradLabel === 'mod.' ? 'Risco moderado' : 'Risco baixo'}` : 'Não avaliado';
+  const morseCls = d.morseLabel ? `${d.morseTotal||'—'} – ${d.morseLabel === 'alto' ? 'Risco ALTO' : d.morseLabel === 'mod.' ? 'Risco moderado' : 'Risco baixo'}` : 'Não avaliado';
+  const fugMap = { i:'Intensivo', si:'Semi-intensivo', ad:'Alta dependência', itm:'Intermediário', cm:'Cuidado mínimo' };
+  const fugCls = d.fugClass ? `${d.fugTotal||'—'} – ${fugMap[d.fugClass]}` : 'Não avaliado';
 
-  // Classificações das escalas
-  const bradCls = d.bradLabel ? `<strong>${d.bradTotal}</strong> – ${d.bradClass==='a'?'Risco ALTO':d.bradClass==='m'?'Risco moderado':'Risco baixo / sem risco'}` : '—';
-  const morseCls = d.morseLabel ? `<strong>${d.morseTotal}</strong> – ${d.morseClass==='a'?'Risco ALTO':d.morseClass==='m'?'Risco moderado':'Risco baixo'}` : '—';
-  const fugNomes = { cm:'Cuidado mínimo', itm:'Intermediário', ad:'Alta dependência', si:'Semi-intensivo', i:'Intensivo' };
-  const fugCls = d.fugClass ? `<strong>${d.fugTotal}</strong> – ${fugNomes[d.fugClass]||''}` : '—';
-
-  const enf = enfermariaDoLeito(d.leito);
-
-  area.innerHTML = `
-    <div class="pv-h">
-      <div class="logo">🏥</div>
-      <h1>PREFEITURA MUNICIPAL DO NATAL<br>HOSPITAL DOS PESCADORES – CLÍNICA MÉDICA<br>EVOLUÇÃO DO ENFERMEIRO</h1>
-      <div class="logo" style="text-align:right;">HOSPESC</div>
+  document.getElementById('preview-area').innerHTML = `
+    <div class="pv-head">
+      <h2>Hospital dos Pescadores – Clínica Médica</h2>
+      <h3>Evolução de Enfermagem</h3>
+      <p>${esc(enf.nome)} · Leito ${pad(leitoAtual)} · Turno ${tipoTurno} · ${fmtD(d.data || hoje())}</p>
     </div>
 
-    <div class="pv-id">
-      <div class="pv-row">
-        <span><strong>Data:</strong> ${fmtD(d.data)}</span>
-        <span><strong>Turno:</strong> ${d.turno === 'DIURNO' ? 'Diurno' : 'Noturno'}</span>
-        <span><strong>${esc(enf.nome)}</strong></span>
-        <span><strong>Leito:</strong> ${pad(d.leito)}</span>
-      </div>
-      <div class="pv-row" style="margin-top:3px;">
-        <span><strong>Paciente:</strong> ${esc(d.pac)}</span>
-        <span><strong>Idade:</strong> ${esc(d.idade)||'—'}</span>
-        <span><strong>DN:</strong> ${fmtD(d.dn)||'—'}</span>
-      </div>
-      <div class="pv-row" style="margin-top:3px;">
-        <span><strong>Admissão:</strong> ${fmtD(d.adm)||'—'}</span>
-        <span><strong>Diagnóstico:</strong> ${esc(d.diag)||'—'}</span>
-      </div>
-      <div class="pv-row" style="margin-top:3px;">
-        <span><strong>Comorbidades:</strong> ${esc(d.comor)||'—'}</span>
-      </div>
-      <div class="pv-row" style="margin-top:3px;">
-        <span><strong>Alergias:</strong> ${esc(d.alergia)||'Não referidas'}</span>
-        <span><strong>Pulseira:</strong> ${esc(d.pulseira)||'—'}</span>
-        ${d.iso ? `<span><strong>Isolamento:</strong> ${esc(d.iso)}${d.microorg?' ('+esc(d.microorg)+')':''}</span>` : ''}
+    <div class="pv-sec">
+      <div class="pv-sec-t">Identificação</div>
+      <div class="pv-sec-c">
+        <div class="pr"><span class="pl">Paciente:</span><span class="pv">${esc(d.pac)}</span></div>
+        <div class="pr">
+          <span class="pl">DN:</span><span class="pv">${fmtD(d.dn)||'—'}</span>
+          <span class="pl">Idade:</span><span class="pv">${esc(d.idade)||'—'}</span>
+          <span class="pl">Adm. enfermaria:</span><span class="pv">${fmtD(d.adm)||'—'}</span>
+          <span class="pl">Adm. HOSPESC:</span><span class="pv">${fmtD(d.admHosp)||'—'}</span>
+        </div>
+        <div class="pr"><span class="pl">Diagnóstico:</span><span class="pv">${esc(d.diag)||'—'}</span></div>
+        <div class="pr"><span class="pl">Comorbidades:</span><span class="pv">${esc(d.comor)||'—'}</span></div>
+        <div class="pr"><span class="pl">Alergias:</span><span class="pv">${esc(d.alergia)||'—'}</span></div>
+        <div class="pr">
+          <span class="pl">Pulseira ID:</span><span class="pv">${esc(d.pulseira)||'—'}</span>
+          <span class="pl">Isolamento:</span><span class="pv">${esc(d.iso)||'—'}${d.microorg?` (${esc(d.microorg)})`:''}</span>
+        </div>
       </div>
     </div>
 
     <div class="pv-sec">
       <div class="pv-sec-t">Pele e Mucosas</div>
-      <div class="pv-sec-c pv-check-list">
-        ${listaCheck(d.pele)}
-        ${d.peleOutros ? `<span>${esc(d.peleOutros)}</span>` : ''}
-      </div>
+      <div class="pv-sec-c pv-check-list">${listaCheck(d.pele)}${d.peleOutros?` · ${esc(d.peleOutros)}`:''}</div>
     </div>
 
     <div class="pv-sec">
-      <div class="pv-sec-t">Avaliação Neurológica</div>
+      <div class="pv-sec-t">Neurológico</div>
       <div class="pv-sec-c">
-        <div class="pv-check-list">${listaCheck(d.neuro)}</div>
-        <div class="pv-row" style="margin-top:3px;">
-          ${d.glas ? `<span><strong>Glasgow:</strong> ${esc(d.glas)}</span>` : ''}
-          ${d.reducao ? `<span><strong>Redução de força:</strong> ${esc(d.reducao)}</span>` : ''}
-          ${(d.pupilas||[]).length ? `<span><strong>Pupilas:</strong> ${(d.pupilas||[]).join(', ')}</span>` : ''}
-        </div>
+        <div>${listaCheck(d.neuro)}${d.glas?` · Glasgow ${esc(d.glas)}`:''}${d.reducao?` · Redução de força: ${esc(d.reducao)}`:''}</div>
+        <div style="margin-top:3px;"><strong>Pupilas:</strong> ${listaCheck(d.pupilas)}</div>
       </div>
     </div>
 
     <div class="pv-sec">
       <div class="pv-sec-t">Sistema Respiratório</div>
       <div class="pv-sec-c">
-        <div class="pv-check-list">${listaCheck(d.torax)}</div>
-        <div><strong>AP:</strong> ${(d.ap||[]).join(', ')||'—'}${d.apOutros?' / '+esc(d.apOutros):''}</div>
-        <div><strong>Ventilação:</strong> ${esc(ventText)}</div>
+        <div>${listaCheck(d.torax)}</div>
+        <div style="margin-top:3px;"><strong>Ausculta:</strong> ${listaCheck(d.ap)}${d.apOutros?` · ${esc(d.apOutros)}`:''}</div>
+        <div style="margin-top:3px;"><strong>Ventilação:</strong> ${esc(ventText)}</div>
       </div>
     </div>
 
@@ -1405,7 +1243,6 @@ async function gerarPDF(){
     }
     const pxPorPag = Math.floor((contentH / contentW) * canvas.width * (contentW / larguraUso));
 
-    // Quebra preferencial
     let breakPx = null;
     const breakEl = area.querySelector('#pdf-break-point');
     if (breakEl) {
@@ -1447,7 +1284,6 @@ async function gerarPDF(){
     const dataBR = dia + mes + ano;
     const nomePac = (d.pac || '').trim();
     const primNome = (nomePac.split(' ')[0] || 'Pac').toUpperCase();
-    const enf = enfermariaDoLeito(leitoAtual);
     const pastaNome = nomePac
       ? `Leito ${pad(leitoAtual)} - ${nomePac}`
       : `Leito ${pad(leitoAtual)} - Sem identificacao`;
@@ -1486,28 +1322,14 @@ async function gerarPDF(){
   btn.disabled = false; btn.textContent = '☁ Salvar PDF no Drive';
 }
 
+// ══════════════════════════════════════════════════════════════════════════════
+// MODAL ADMISSÃO (também usado para edição)
+// ══════════════════════════════════════════════════════════════════════════════
 async function acaoEditarAdmissao(){
-  fecharModalLeito();
   modoEdicaoAdm = true;
   abrirModalAdm(leitoAtual, false);
 }
 
-async function acaoAlta(){
-  fecharModalLeito();
-  leitoParaAlta = leitoAtual;
-  document.getElementById('modal-alta-titulo').textContent = `Alta – Leito ${pad(leitoAtual)}`;
-  setF('alta-tipo', '');
-  setF('alta-destino', '');
-  document.getElementById('alta-destino-wrap').style.display = 'none';
-  setF('alta-data', hoje());
-  const agora = new Date();
-  setF('alta-hora', pad(agora.getHours()) + ':' + pad(agora.getMinutes()));
-  setF('alta-obs', '');
-  document.getElementById('modal-alta').classList.add('show');
-  _ativarCaixaAlta();
-}
-
-// ── MODAL ADMISSÃO ───────────────────────────────────────────────────────────
 async function abrirModalAdm(leito, isNova){
   const d = await leitosData();
   const l = d[leito] || {};
@@ -1529,6 +1351,10 @@ async function abrirModalAdm(leito, isNova){
     l.origem === 'Transferência de outro serviço' ? 'flex' : 'none';
   setF('m-comor', l.comor || '');
   setF('m-alergia', l.alergia || '');
+
+  // Botão de Alta no modal — só quando o leito está ocupado e estamos editando
+  const btnAlta = document.getElementById('btn-alta-modal');
+  btnAlta.style.display = (l.ocupado && !isNova) ? '' : 'none';
 
   document.getElementById('modal-adm').classList.add('show');
   _ativarCaixaAlta();
@@ -1565,7 +1391,8 @@ async function salvarAdmissao(){
       admissaoRegistradaEm: l.admissaoRegistradaEm || new Date().toISOString()
     };
     await dbSet('cm_leitos', d);
-    memDel('cm_leitos'); // invalida cache para próxima leitura refletir a mudança
+    memDel('cm_leitos');
+
     if (novaAdmissao) {
       try {
         const log = (await dbGet('cm_admissao_log')) || [];
@@ -1589,9 +1416,21 @@ async function salvarAdmissao(){
     toast(novaAdmissao ? '✓ Paciente admitido' : '✓ Dados atualizados');
     await renderLeitos();
 
-    // Se é admissão nova, encaminha para a evolução
-    if (novaAdmissao && !modoEdicaoAdm) {
+    // Se é admissão nova → segue direto para a evolução
+    if (novaAdmissao) {
       setTimeout(() => abrirForm(leitoAtual), 400);
+    } else if (modoEdicaoAdm) {
+      // Se estava editando a partir do formulário, atualiza os campos do form
+      const enf = enfermariaDoLeito(leitoAtual);
+      setF('f-pac',      d[leitoAtual].pac);
+      setF('f-leito',    `Leito ${pad(leitoAtual)} – ${enf.nome}`);
+      setF('f-dn',       d[leitoAtual].dn);
+      setF('f-idade',    calcIdade(d[leitoAtual].dn));
+      setF('f-diag',     d[leitoAtual].diag);
+      setF('f-adm',      d[leitoAtual].adm);
+      setF('f-adm-hosp', d[leitoAtual].admHosp);
+      setF('f-comor',    d[leitoAtual].comor);
+      setF('f-alergia',  d[leitoAtual].alergia);
     }
   } finally {
     hideLoading();
@@ -1599,7 +1438,34 @@ async function salvarAdmissao(){
   }
 }
 
-// ── ALTA ─────────────────────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+// ALTA — fluxo similar à UTI
+// ══════════════════════════════════════════════════════════════════════════════
+// Chamado da preview screen
+async function confirmarAlta(){
+  abrirModalAlta(leitoAtual);
+}
+
+// Chamado do botão "Alta" dentro do modal de admissão
+async function darAltaPeloModal(){
+  fecharModalAdm();
+  abrirModalAlta(leitoAtual);
+}
+
+function abrirModalAlta(leito){
+  leitoParaAlta = leito;
+  document.getElementById('modal-alta-titulo').textContent = `🏥 Alta – Leito ${pad(leito)}`;
+  setF('alta-tipo', '');
+  setF('alta-destino', '');
+  document.getElementById('alta-destino-wrap').style.display = 'none';
+  setF('alta-data', hoje());
+  const agora = new Date();
+  setF('alta-hora', pad(agora.getHours()) + ':' + pad(agora.getMinutes()));
+  setF('alta-obs', '');
+  document.getElementById('modal-alta').classList.add('show');
+  _ativarCaixaAlta();
+}
+
 function fecharModalAlta(){
   document.getElementById('modal-alta').classList.remove('show');
 }
@@ -1615,16 +1481,15 @@ async function confirmarAltaFinal(){
   if (tipo === 'Transferência para outro serviço' && !destino) {
     toast('Informe o destino da transferência', true); return;
   }
-  if (!data) { toast('Informe a data da alta', true); return; }
+  if (!data || !hora) { toast('Informe data e hora da alta', true); return; }
 
   if (!confirm(`Confirmar alta do Leito ${pad(leitoParaAlta)}?\nEsta ação libera o leito.`)) return;
 
-  showLoading('Dando alta...');
+  showLoading('Registrando alta...');
   try {
     const d = await leitosData();
     const pacAntes = { ...d[leitoParaAlta] };
 
-    // Grava log de alta
     try {
       const log = (await dbGet('cm_alta_log')) || [];
       log.push({
@@ -1655,18 +1520,78 @@ async function confirmarAltaFinal(){
     };
     await dbSet('cm_leitos', d);
     memDel('cm_leitos');
-    // Invalida cache da evolução do leito liberado (para não aparecer badge no próximo turno)
-    memDel(evKey(leitoParaAlta, turno, hoje()));
-    toast(`✓ Alta registrada – Leito ${pad(leitoParaAlta)} liberado`);
-    await renderLeitos();
+
+    // Apaga evoluções do dia (para não herdar dados na próxima admissão)
+    await dbDelete(evKey(leitoParaAlta, 'DIURNO',  hoje()));
+    await dbDelete(evKey(leitoParaAlta, 'NOTURNO', hoje()));
+
+    fecharModalAlta();
+    toast(`✓ ${tipo} registrada – Leito ${pad(leitoParaAlta)} liberado`);
+    await irLeitos();
   } finally {
     hideLoading();
   }
 }
 
-// ── CAIXA ALTA AUTOMÁTICA ────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+// TRANSFERÊNCIA — mover paciente para outro leito (mesma enfermaria ou outra)
+// ══════════════════════════════════════════════════════════════════════════════
+async function prepararTransferencia(){
+  const enf = enfermariaDoLeito(leitoAtual);
+  const novoLeito = prompt(
+    `Transferir "${gf('f-pac')}" do ${enf.nome} · Leito ${pad(leitoAtual)} para qual leito?\n\n(informe um número de 1 a ${TOTAL_LEITOS})`
+  );
+  if (!novoLeito) return;
+  const dest = parseInt(novoLeito);
+  if (isNaN(dest) || dest < 1 || dest > TOTAL_LEITOS) { toast('Leito inválido', true); return; }
+  if (dest === leitoAtual) { toast('Destino igual à origem', true); return; }
+
+  showLoading('Transferindo...');
+  try {
+    const ld = await leitosData();
+    if (ld[dest] && ld[dest].ocupado) {
+      hideLoading();
+      toast('Leito ' + pad(dest) + ' já está ocupado', true);
+      return;
+    }
+
+    // Move dados de admissão
+    ld[dest] = { ...ld[leitoAtual] };
+    ld[leitoAtual] = {
+      ocupado:false, pac:'', diag:'', dn:'', adm:'', admHosp:'',
+      comor:'', alergia:'', sexo:'', origem:'', origemOutro:''
+    };
+    await dbSet('cm_leitos', ld);
+    memDel('cm_leitos');
+
+    // Move evoluções do dia
+    for (const t of ['DIURNO', 'NOTURNO']) {
+      const ev = await dbGet(evKey(leitoAtual, t, hoje()));
+      if (ev) {
+        await dbSet(evKey(dest, t, hoje()), { ...ev, leito: dest });
+        await dbDelete(evKey(leitoAtual, t, hoje()));
+      }
+    }
+
+    leitoAtual = dest;
+    toast(`✓ Transferido para Leito ${pad(dest)}`);
+    await irLeitos();
+  } catch(e) {
+    console.error('transferência:', e);
+    toast('Erro: ' + e.message, true);
+  } finally {
+    hideLoading();
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// CAIXA ALTA AUTOMÁTICA (mobile-safe via blur)
+// ══════════════════════════════════════════════════════════════════════════════
 function _ativarCaixaAlta(){
-  document.querySelectorAll('.overlay.show input[type="text"], .overlay.show textarea').forEach(el => {
+  document.querySelectorAll('input[type="text"], textarea').forEach(el => _ativarCaixaAltaEm(el));
+}
+function _ativarCaixaAltaEm(root){
+  const aplicar = el => {
     if (el.dataset.ca === '1') return;
     el.dataset.ca = '1';
     if (el.readOnly) return;
@@ -1676,10 +1601,16 @@ function _ativarCaixaAlta(){
       const up = el.value.toUpperCase();
       if (el.value !== up) el.value = up;
     });
-  });
+  };
+  if (root.matches && root.matches('input[type="text"], textarea')) aplicar(root);
+  if (root.querySelectorAll) {
+    root.querySelectorAll('input[type="text"], textarea').forEach(aplicar);
+  }
 }
 
-// ── INICIALIZAÇÃO ────────────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+// INICIALIZAÇÃO
+// ══════════════════════════════════════════════════════════════════════════════
 document.addEventListener('DOMContentLoaded', () => {
   mostrarTela('t-login');
   document.getElementById('t-login').classList.add('ativa');
