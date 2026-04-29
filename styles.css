@@ -47,7 +47,8 @@ body{font-family:var(--fonte);background:#e8f0e6;color:var(--texto);min-height:1
 .card{background:white;border:1px solid var(--borda);border-top:none;border-radius:0 0 var(--r) var(--r);padding:1.2rem;display:flex;flex-direction:column;gap:1.2rem;}
 
 /* ── TURNO ── */
-#t-turno{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:92vh;gap:1.8rem;max-width:780px;margin:0 auto;padding:1rem;}
+#t-turno{flex-direction:column;align-items:center;justify-content:center;min-height:92vh;gap:1.8rem;max-width:780px;margin:0 auto;padding:1rem;}
+#t-ala{flex-direction:column;align-items:center;justify-content:center;min-height:92vh;gap:1.8rem;max-width:780px;margin:0 auto;padding:1rem;}
 .logo-h{text-align:center;}
 .logo-h h1{font-size:1rem;font-weight:700;color:var(--verde);line-height:1.5;}
 .logo-h p{font-size:.75rem;color:var(--muted);margin-top:3px;letter-spacing:.05em;text-transform:uppercase;}
