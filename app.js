@@ -187,15 +187,25 @@ async function leitosData(){
 // ── NAVEGAÇÃO ────────────────────────────────────────────────────────────────
 const TELAS_SIMPLES = ['t-login','t-turno','t-ala'];
 function mostrarTela(id){
-  document.querySelectorAll('.tela').forEach(t => t.classList.remove('ativa'));
+  // Esconde todas as telas com classe .tela
+  document.querySelectorAll('.tela').forEach(t => {
+    t.classList.remove('ativa');
+    t.style.display = 'none';
+  });
+  // Esconde as telas simples (controladas por inline style)
   TELAS_SIMPLES.forEach(tid => {
     const el = document.getElementById(tid);
     if (el) el.style.display = 'none';
   });
+  // Exibe a tela alvo
   const el = document.getElementById(id);
   if (!el) return;
-  if (TELAS_SIMPLES.includes(id)) el.style.display = 'flex';
-  else el.classList.add('ativa');
+  if (TELAS_SIMPLES.includes(id)) {
+    el.style.display = 'flex';
+  } else {
+    el.style.display = '';   // devolve ao CSS (.tela.ativa → display:block)
+    el.classList.add('ativa');
+  }
 }
 
 function irTelaTurno(){
@@ -211,7 +221,7 @@ function irAla(){
   const sub = document.getElementById('ala-sub');
   if (sub) sub.textContent = `Turno ${turno === 'DIURNO' ? 'Diurno ☀' : 'Noturno 🌙'} — Selecione a ala`;
 }
-function irLeitos(){ mostrarTela('t-leitos'); renderLeitos(); window.scrollTo(0,0); }
+function irLeitos(){ mostrarTela('t-leitos'); renderLeitos().catch(e => { console.error('renderLeitos:', e); toast('Erro ao carregar leitos', true); }); window.scrollTo(0,0); }
 function escolherAla(ala){
   alaAtual = ala;
   irLeitos();
@@ -266,8 +276,19 @@ async function escolherTurno(t){
 // ══════════════════════════════════════════════════════════════════════════════
 async function renderLeitos(){
   const wrap = document.getElementById('enfermarias-wrap');
+  if (!wrap) return; // tela não está no DOM ainda
+  wrap.innerHTML = '<p style="color:var(--muted);font-size:.8rem;padding:.5rem;">Carregando leitos...</p>';
+
+  let d;
+  try {
+    d = await leitosData();
+  } catch(e) {
+    wrap.innerHTML = '<p style="color:var(--vermelho);font-size:.8rem;padding:.5rem;">Erro ao carregar dados. Verifique a conexão.</p>';
+    console.error('leitosData:', e);
+    return;
+  }
+
   wrap.innerHTML = '';
-  const d = await leitosData();
   const hj = hoje();
 
   // Filtra enfermarias pela ala selecionada
