@@ -1558,33 +1558,15 @@ async function gerarPDF(){
       pastaRaizId: PASTA_EVOLUCAO_ID
     });
 
-    // Usa FormData para garantir "simple request" sem preflight CORS.
-    // O Apps Script lê e-postData.contents quando o body chega como campo 'payload'.
-    // Alternativa: envia como texto puro via form urlencoded — também sem preflight.
-    const form = new FormData();
-    form.append('payload', payload);
-
-    let enviado = false;
-    try {
-      await fetch(APPS_SCRIPT_URL, {
-        method: 'POST',
-        mode: 'no-cors',
-        body: form
-      });
-      enviado = true;
-    } catch(fetchErr) {
-      console.warn('fetch FormData falhou, tentando text/plain:', fetchErr);
-    }
-
-    // Fallback: text/plain (funciona quando FormData não é aceita)
-    if (!enviado) {
-      await fetch(APPS_SCRIPT_URL, {
-        method: 'POST',
-        mode: 'no-cors',
-        headers: { 'Content-Type': 'text/plain' },
-        body: payload
-      });
-    }
+    // text/plain é "simple request" — sem preflight CORS.
+    // O Apps Script lê o body via e.postData.contents.
+    // NÃO usar FormData aqui: o Apps Script atual não lê e.parameter.payload.
+    await fetch(APPS_SCRIPT_URL, {
+      method: 'POST',
+      mode: 'no-cors',
+      headers: { 'Content-Type': 'text/plain' },
+      body: payload
+    });
 
     status.textContent = '✓ Enviado ao Drive com sucesso';
     status.style.color = 'var(--verde)';
