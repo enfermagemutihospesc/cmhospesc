@@ -121,6 +121,7 @@ function enfermariaDoLeito(n){ return ENFERMARIAS.find(e=>e.leitos.includes(n));
       <button class="btn btn-sec btn-sm" onclick="irAla()">← Trocar ala</button>
       <button class="btn btn-sec btn-sm" onclick="irTurno()">↺ Trocar turno</button>
       <button class="btn btn-pdf btn-sm" onclick="imprimirLote(alaAtual)" title="Imprimir todas as evoluções do turno desta ala">🖨 Imprimir turno</button>
+      <button class="btn btn-ok btn-sm" onclick="confirmarEnvioLote()" title="Gerar e enviar PDFs de todas as evoluções ao Drive">☁ Enviar todos ao Drive</button>
     </div>
   </div>
 </div>
