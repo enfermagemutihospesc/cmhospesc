@@ -1540,17 +1540,40 @@ async function gerarPDF(){
     const dataUri = pdf.output('datauristring');
     const base64 = dataUri.split(',')[1];
 
-    await fetch(APPS_SCRIPT_URL, {
-      method: 'POST',
-      mode: 'no-cors',
-      headers: { 'Content-Type': 'text/plain' },
-      body: JSON.stringify({
-        titulo,
-        arquivoBase64: base64,
-        pasta: pastaNome,
-        pastaRaizId: PASTA_EVOLUCAO_ID
-      })
+    const payload = JSON.stringify({
+      titulo,
+      arquivoBase64: base64,
+      pasta: pastaNome,
+      pastaRaizId: PASTA_EVOLUCAO_ID
     });
+
+    // Usa FormData para garantir "simple request" sem preflight CORS.
+    // O Apps Script lê e-postData.contents quando o body chega como campo 'payload'.
+    // Alternativa: envia como texto puro via form urlencoded — também sem preflight.
+    const form = new FormData();
+    form.append('payload', payload);
+
+    let enviado = false;
+    try {
+      await fetch(APPS_SCRIPT_URL, {
+        method: 'POST',
+        mode: 'no-cors',
+        body: form
+      });
+      enviado = true;
+    } catch(fetchErr) {
+      console.warn('fetch FormData falhou, tentando text/plain:', fetchErr);
+    }
+
+    // Fallback: text/plain (funciona quando FormData não é aceita)
+    if (!enviado) {
+      await fetch(APPS_SCRIPT_URL, {
+        method: 'POST',
+        mode: 'no-cors',
+        headers: { 'Content-Type': 'text/plain' },
+        body: payload
+      });
+    }
 
     status.textContent = '✓ Enviado ao Drive com sucesso';
     status.style.color = 'var(--verde)';
@@ -1858,6 +1881,247 @@ function _ativarCaixaAltaEm(root){
 // ══════════════════════════════════════════════════════════════════════════════
 // INICIALIZAÇÃO
 // ══════════════════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════════════
+// IMPRESSÃO EM LOTE — todas as evoluções do turno de uma ala
+// ══════════════════════════════════════════════════════════════════════════════
+async function imprimirLote(ala){
+  const hj = hoje();
+  const enfs = ala === 'todos' ? ENFERMARIAS
+    : ENFERMARIAS.filter(e => e.ala === ala);
+  const leitos = enfs.flatMap(e => e.leitos);
+
+  showLoading('Carregando evoluções do turno...');
+  try {
+    const ld = await leitosData();
+    const chaves = leitos
+      .filter(n => ld[n]?.ocupado)
+      .map(n => evKey(n, turno, hj));
+
+    if (!chaves.length) {
+      hideLoading();
+      toast('Nenhum leito ocupado nesta ala', true);
+      return;
+    }
+
+    const evs = await dbGetMany(chaves);
+    const pares = leitos
+      .filter(n => ld[n]?.ocupado && evs[evKey(n, turno, hj)])
+      .map(n => ({ leito: n, pac: ld[n], ev: evs[evKey(n, turno, hj)] }));
+
+    if (!pares.length) {
+      hideLoading();
+      toast('Nenhuma evolução preenchida neste turno', true);
+      return;
+    }
+
+    // Monta HTML de todas as evoluções concatenadas para impressão
+    let htmlTotal = '';
+    for (const { leito, pac, ev } of pares) {
+      const enf = enfermariaDoLeito(leito);
+      ev.pac      = ev.pac      || pac.pac      || '';
+      ev.diag     = ev.diag     || pac.diag     || '';
+      ev.dn       = ev.dn       || pac.dn       || '';
+      ev.adm      = ev.adm      || pac.adm      || '';
+      ev.admHosp  = ev.admHosp  || pac.admHosp  || '';
+      ev.comor    = ev.comor    || pac.comor    || '';
+      ev.alergia  = ev.alergia  || pac.alergia  || '';
+      ev.leito    = leito;
+      ev.turno    = turno;
+      // Gera HTML da evolução usando o mesmo _htmlEvolucao
+      htmlTotal += _htmlEvolucaoLote(ev, enf, leito);
+    }
+
+    hideLoading();
+    _abrirJanelaImpressao(htmlTotal, pares.length);
+
+  } catch(e) {
+    hideLoading();
+    console.error('imprimirLote:', e);
+    toast('Erro ao carregar evoluções: ' + e.message, true);
+  }
+}
+
+function _htmlEvolucaoLote(d, enf, leitoNum){
+  const tipoTurno = (d.turno||turno) === 'DIURNO' ? 'DIURNO (07h–19h)' : 'NOTURNO (19h–07h)';
+  const listaCheck = arr => (arr && arr.length) ? arr.join(', ') : '—';
+
+  const ventText = (() => {
+    if (!d.vent) return '—';
+    if (d.vent === 'Cateter nasal' && d.ventExtra?.cnLmin) return `${d.vent} ${d.ventExtra.cnLmin} L/min`;
+    if (d.vent === 'Macronebulização' && d.ventExtra?.mvFio2) return `${d.vent} FiO₂ ${d.ventExtra.mvFio2}%`;
+    if (d.vent === 'Máscara NR' && d.ventExtra?.mnrLmin) return `${d.vent} ${d.ventExtra.mnrLmin} L/min`;
+    if (d.vent === 'VNI' && d.ventExtra?.vniTipo) return `${d.vent} (${d.ventExtra.vniTipo})`;
+    return d.vent;
+  })();
+
+  const dietaText = (() => {
+    if (!d.dieta) return '—';
+    const v = d.dietaVaz || {};
+    const k = d.dieta.toLowerCase();
+    return v[k] ? `${d.dieta} – vazão ${v[k]}` : d.dieta;
+  })();
+
+  const hvText = (() => {
+    const partes = [];
+    if (d.hv && d.hv !== 'Nenhuma') {
+      const v = d.hvVol || {};
+      const vols = [v.m&&`M ${v.m}`, v.t&&`T ${v.t}`, v.n&&`N ${v.n}`].filter(Boolean);
+      partes.push(d.hv + (vols.length ? ` – ${vols.join(' / ')} ml/h` : ''));
+    }
+    (d.infusoesExtras||[]).forEach(inf => { if (inf.nome) partes.push(inf.nome+(inf.vol?` ${inf.vol} ml/h`:'')); });
+    return partes.length ? partes.join(' · ') : 'Nenhuma';
+  })();
+
+  const dispList = [];
+  const dp = d.dispositivos || {};
+  if (dp.avp?.marcado)   dispList.push(`AVP${dp.avp.local?` (${dp.avp.local})`:''}${dp.avp.data?` inst. ${fmtD(dp.avp.data)}`:''}`);
+  if (dp.avc?.marcado)   dispList.push(`AVC${dp.avc.local?` (${dp.avc.local})`:''}${dp.avc.data?` inst. ${fmtD(dp.avc.data)}`:''}`);
+  if (dp.cdl?.marcado)   dispList.push(`CDL${dp.cdl.local?` (${dp.cdl.local})`:''}${dp.cdl.data?` inst. ${fmtD(dp.cdl.data)}`:''}`);
+  if (dp.drt?.marcado)   dispList.push(`Dreno tórax${dp.drt.lado?` ${dp.drt.lado}`:''}${dp.drt.deb?` déb: ${dp.drt.deb}`:''}`);
+  if (dp.sne?.marcado)   dispList.push(dp.sne.tipo||'SNE/SNG');
+  if (dp.cisto?.marcado) dispList.push('Cistostomia');
+  if (dp.svd2?.marcado)  dispList.push('SVD');
+  (d.dispExtras||[]).forEach(desc => { if (desc) dispList.push(desc); });
+
+  const atbList = (d.atbs||[]).filter(a=>a.nome).map(a => {
+    if (a.d0) {
+      const diff = Math.round((new Date(hoje()+'T00:00:00') - new Date(a.d0+'T00:00:00')) / 86400000);
+      return `${a.nome} (D0: ${fmtD(a.d0)} — D${diff>=0?diff:'?'})`;
+    }
+    return a.nome;
+  });
+
+  const bradMap = {a:'Risco ALTO', m:'Risco moderado', b:'Risco baixo'};
+  const morseMap = {a:'Risco ALTO', m:'Risco moderado', b:'Risco baixo'};
+  const fugMap = {i:'Intensivo', si:'Semi-intensivo', ad:'Alta dependência', itm:'Intermediário', cm:'Cuidado mínimo'};
+  const bradCls  = d.bradClass  ? `${d.bradTotal} – ${bradMap[d.bradClass]||d.bradClass}` : 'Não avaliado';
+  const morseCls = d.morseClass ? `${d.morseTotal} – ${morseMap[d.morseClass]||d.morseClass}` : 'Não avaliado';
+  const fugCls   = d.fugClass   ? `${d.fugTotal} – ${fugMap[d.fugClass]||d.fugClass}` : 'Não avaliado';
+
+  const campos = ['pa','fc','fr','spo2','tax','hgt'];
+  const ssvvLabels = {pa:'PA',fc:'FC',fr:'FR',spo2:'SpO2',tax:'Tax',hgt:'HGT'};
+  const ssvvTurnosLabel = {m:'Manhã',t:'Tarde',n:'Noite'};
+  const ssvvHtml = (() => {
+    if (!d.ssvv) return '';
+    const linhas = ['m','t','n'].map(tr => {
+      if (!d.ssvv[tr]) return '';
+      const vals = campos.filter(c => d.ssvv[tr][c]).map(c => `${ssvvLabels[c]}: ${esc(d.ssvv[tr][c])}`);
+      return vals.length ? `<div><strong>${ssvvTurnosLabel[tr]}:</strong> ${vals.join(' · ')}</div>` : '';
+    }).filter(Boolean);
+    return linhas.length ? linhas.join('') : '';
+  })();
+
+  return `
+  <div class="evolucao-pagina">
+    <div class="pv-head">
+      <h2>Hospital dos Pescadores – Clínica Médica</h2>
+      <h3>Evolução de Enfermagem</h3>
+      <p>${esc(enf.nome)} · Leito ${pad(leitoNum)} · Turno ${tipoTurno} · ${fmtD(d.data || hoje())}</p>
+    </div>
+    <div class="pv-sec"><div class="pv-sec-t">Identificação</div><div class="pv-sec-c">
+      <div class="pr"><span class="pl">Paciente:</span><span class="pv">${esc(d.pac)}</span></div>
+      <div class="pr">
+        <span class="pl">DN:</span><span class="pv">${fmtD(d.dn)||'—'}</span>
+        <span class="pl">Idade:</span><span class="pv">${esc(d.idade||calcIdade(d.dn))||'—'}</span>
+        <span class="pl">Adm. enfermaria:</span><span class="pv">${fmtD(d.adm)||'—'}</span>
+        <span class="pl">Adm. HOSPESC:</span><span class="pv">${fmtD(d.admHosp)||'—'}</span>
+      </div>
+      <div class="pr"><span class="pl">Diagnóstico:</span><span class="pv">${esc(d.diag)||'—'}</span></div>
+      <div class="pr"><span class="pl">Comorbidades:</span><span class="pv">${esc(d.comor)||'—'}</span></div>
+      <div class="pr"><span class="pl">Alergias:</span><span class="pv">${esc(d.alergia)||'—'}</span>
+        <span class="pl">Pulseira:</span><span class="pv">${esc(d.pulseira)||'—'}</span>
+        <span class="pl">Isolamento:</span><span class="pv">${esc(d.iso)||'—'}${d.microorg?` (${esc(d.microorg)})`:''}</span>
+      </div>
+    </div></div>
+
+    <div class="pv-sec"><div class="pv-sec-t">Neurológico / Pele</div><div class="pv-sec-c">
+      <div>${listaCheck(d.neuro)}${d.glas?` · Glasgow ${esc(d.glas)}`:''}${d.reducao?` · Força: ${esc(d.reducao)}`:''} · Pupilas: ${listaCheck(d.pupilas)}</div>
+      <div style="margin-top:2px;"><strong>Pele:</strong> ${listaCheck(d.pele)}${d.peleOutros?` · ${esc(d.peleOutros)}`:''}</div>
+    </div></div>
+
+    <div class="pv-sec"><div class="pv-sec-t">Respiratório / CV / Abdome</div><div class="pv-sec-c">
+      <div>${listaCheck(d.torax)} · Ausculta: ${listaCheck(d.ap)}${d.apOutros?` · ${esc(d.apOutros)}`:''} · Vent: ${esc(ventText)}</div>
+      <div style="margin-top:2px;"><strong>CV:</strong> ${listaCheck(d.cv)} · <strong>Abdome:</strong> ${listaCheck(d.abd)}</div>
+    </div></div>
+
+    <div class="pv-sec"><div class="pv-sec-t">Dieta / Diurese / Intest.</div><div class="pv-sec-c">
+      <div><strong>Dieta:</strong> ${esc(dietaText)} · <strong>Diurese:</strong> ${listaCheck(d.diurese)}${d.diureseMl?.m||d.diureseMl?.t||d.diureseMl?.n?' Déb: M '+( d.diureseMl?.m||'—')+'/T '+(d.diureseMl?.t||'—')+'/N '+(d.diureseMl?.n||'—')+' ml':''}</div>
+      <div style="margin-top:2px;"><strong>Intest.:</strong> ${listaCheck(d.intest)}</div>
+    </div></div>
+
+    ${dispList.length?`<div class="pv-sec"><div class="pv-sec-t">Dispositivos</div><div class="pv-sec-c">${dispList.join(' · ')}</div></div>`:''}
+
+    <div class="pv-sec"><div class="pv-sec-t">HV / ATBs</div><div class="pv-sec-c">
+      <div><strong>HV:</strong> ${esc(hvText)}</div>
+      ${atbList.length?`<div style="margin-top:2px;"><strong>ATBs:</strong> ${atbList.join(' · ')}</div>`:''}
+      ${d.eletrolitos?`<div style="margin-top:2px;"><strong>Eletrólitos:</strong> ${esc(d.eletrolitos)}</div>`:''}
+    </div></div>
+
+    ${ssvvHtml?`<div class="pv-sec"><div class="pv-sec-t">SSVV / HGT</div><div class="pv-sec-c">${ssvvHtml}</div></div>`:''}
+
+    <div class="pv-sec"><div class="pv-sec-t">Escalas</div>
+      <div style="border:1px solid black;border-top:none;">
+        <div class="pv-escala primeira"><span>Braden — LPP</span><span>${bradCls}</span></div>
+        <div class="pv-escala"><span>Morse — Queda</span><span>${morseCls}</span></div>
+        <div class="pv-escala"><span>Fugulin — Complexidade</span><span>${fugCls}</span></div>
+      </div>
+    </div>
+
+    ${d.obs?`<div class="pv-sec"><div class="pv-sec-t">Observações / Intercorrências</div><div class="pv-sec-c pv-textao">${esc(d.obs)}</div></div>`:''}
+
+    <div class="pv-foot">${esc(d.autor)||'Enf.'} · ${new Date().toLocaleString('pt-BR')}</div>
+  </div>`;
+}
+
+function _abrirJanelaImpressao(htmlConteudo, qtd){
+  const estilos = Array.from(document.styleSheets)
+    .flatMap(ss => { try { return Array.from(ss.cssRules).map(r=>r.cssText); } catch(e){ return []; } })
+    .join('\n');
+
+  const janela = window.open('', '_blank', 'width=900,height=700');
+  janela.document.write(`<!DOCTYPE html><html lang="pt-BR"><head>
+    <meta charset="UTF-8">
+    <title>Evoluções CM – Turno ${turno} – ${fmtD(hoje())}</title>
+    <style>
+      ${estilos}
+      body { background: white; margin: 0; padding: 0; font-family: 'IBM Plex Sans', sans-serif; }
+      .evolucao-pagina { page-break-after: always; break-after: page; padding: 6mm; font-size: .66rem; }
+      .evolucao-pagina:last-child { page-break-after: avoid; break-after: avoid; }
+      .pv-head { text-align:center; padding:.4rem; border-bottom:2px solid #000; margin-bottom:0; }
+      .pv-head h2 { font-size:.82rem; font-weight:800; text-transform:uppercase; margin:0; }
+      .pv-head h3 { font-size:.7rem; font-weight:700; margin:1px 0; }
+      .pv-head p  { font-size:.64rem; margin:0; }
+      .pv-sec { margin:0; }
+      .pv-sec-t { background:#1e8449; color:white; font-size:.58rem; font-weight:800;
+        letter-spacing:.05em; text-transform:uppercase; padding:2px 7px;
+        border:1px solid black; border-bottom:none; }
+      .pv-sec-c { padding:3px 7px; border:1px solid black; border-top:none; font-size:.64rem; }
+      .pv-sec-c .pr { display:flex; flex-wrap:wrap; gap:2px 10px; border-bottom:1px solid #ddd; padding:2px 0; }
+      .pv-sec-c .pr:last-child { border-bottom:none; }
+      .pv-sec-c .pl { color:#555; font-weight:700; font-size:.58rem; text-transform:uppercase; }
+      .pv-sec-c .pv { font-weight:500; }
+      .pv-textao { white-space:pre-wrap; word-break:break-word; line-height:1.4; }
+      .pv-escala { display:flex; justify-content:space-between; padding:2px 7px;
+        border-bottom:1px solid black; font-size:.62rem; }
+      .pv-escala.primeira { }
+      .pv-escala:last-child { border-bottom:none; }
+      .pv-foot { border-top:2px solid #000; padding:.3rem .5rem;
+        display:flex; justify-content:space-between; font-size:.6rem; color:#555; }
+      @media print {
+        .evolucao-pagina { page-break-after: always; break-after: page; }
+        .evolucao-pagina:last-child { page-break-after: avoid; }
+      }
+    </style>
+  </head><body>
+    <div style="text-align:center;padding:6px 0;background:#1e8449;color:white;font-size:.75rem;font-weight:700;print-color-adjust:exact;">
+      Clínica Médica – Hospital dos Pescadores · Turno ${turno} · ${fmtD(hoje())} · ${qtd} evolução(ões)
+      <button onclick="window.print()" style="margin-left:16px;padding:3px 12px;background:white;color:#1e8449;border:none;border-radius:4px;font-weight:700;cursor:pointer;">🖨 Imprimir</button>
+    </div>
+    ${htmlConteudo}
+  </body></html>`);
+  janela.document.close();
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   mostrarTela('t-login');
   document.getElementById('t-login').classList.add('ativa');
