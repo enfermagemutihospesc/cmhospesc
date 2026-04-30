@@ -230,10 +230,29 @@ label.disp .disp-c input,label.disp .disp-c select{font-size:.74rem;padding:3px 
 .toast.erro{background:var(--vermelho);}
 
 /* ── LOADING ── */
-.loading-overlay{display:none;position:fixed;inset:0;background:rgba(255,255,255,.85);z-index:200;align-items:center;justify-content:center;flex-direction:column;gap:1rem;}
+.loading-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:200;align-items:center;justify-content:center;flex-direction:column;gap:1rem;padding:1rem;}
 .loading-overlay.show{display:flex;}
 .loading-spinner{width:36px;height:36px;border:3px solid var(--borda);border-top-color:var(--verde-m);border-radius:50%;animation:spin .8s linear infinite;}
 .loading-overlay p{font-size:.85rem;color:var(--muted);font-weight:500;}
+
+/* Modo simples (default) — spinner e mensagem */
+.loading-simple{background:white;padding:1.6rem 2rem;border-radius:12px;display:flex;flex-direction:column;align-items:center;gap:1rem;box-shadow:0 6px 24px rgba(0,0,0,.18);}
+.loading-batch{display:none;}
+
+/* Modo batch — barra de progresso */
+.loading-overlay.batch .loading-simple{display:none;}
+.loading-overlay.batch .loading-batch{
+  display:flex;flex-direction:column;gap:.9rem;
+  background:white;padding:1.4rem 1.6rem;border-radius:14px;
+  box-shadow:0 6px 24px rgba(0,0,0,.22);
+  width:100%;max-width:440px;
+}
+.loading-batch h3{font-size:1rem;font-weight:700;color:var(--verde);text-align:center;}
+.loading-batch .batch-aviso{background:#fff8e1;border:1px solid #f5c842;border-radius:8px;padding:.7rem .9rem;font-size:.78rem;color:#5a4a00;line-height:1.45;text-align:center;}
+.loading-batch .batch-bar-wrap{background:#e0e6e8;border-radius:10px;height:18px;overflow:hidden;border:1px solid var(--borda);}
+.loading-batch .batch-bar{background:linear-gradient(90deg,var(--verde-m),var(--verde));height:100%;width:0%;transition:width .35s ease-out;border-radius:9px 0 0 9px;}
+.loading-batch .batch-info{display:flex;justify-content:space-between;font-size:.82rem;font-weight:700;color:var(--verde);}
+.loading-batch .batch-msg{font-size:.78rem;color:var(--muted);text-align:center;font-style:italic;min-height:18px;}
 
 @keyframes spin{to{transform:rotate(360deg);}}
 
