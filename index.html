@@ -545,7 +545,28 @@ function enfermariaDoLeito(n){ return ENFERMARIAS.find(e=>e.leitos.includes(n));
 
 <div id="toast" class="toast"></div>
 <div class="loading-overlay" id="loading-overlay">
-  <div class="loading-spinner"></div><p id="loading-msg">Carregando...</p>
+  <!-- Modo simples (carregamento normal) -->
+  <div class="loading-simple">
+    <div class="loading-spinner"></div>
+    <p id="loading-msg">Carregando...</p>
+  </div>
+
+  <!-- Modo batch (envio em lote com barra de progresso) -->
+  <div class="loading-batch">
+    <h3 id="progress-title">Enviando ao Drive</h3>
+    <div class="batch-aviso">
+      ⚠️ <strong>Não feche o navegador, nem troque de aba.</strong><br>
+      O envio pode levar alguns minutos.
+    </div>
+    <div class="batch-bar-wrap">
+      <div class="batch-bar" id="progress-bar"></div>
+    </div>
+    <div class="batch-info">
+      <span id="progress-count">0 / 0</span>
+      <span id="progress-percent">0%</span>
+    </div>
+    <p id="progress-msg" class="batch-msg">Preparando...</p>
+  </div>
 </div>
 
 <script src="app.js"></script>
