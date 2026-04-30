@@ -72,10 +72,13 @@ function toast(msg, erro=false){
 }
 function showLoading(msg='Carregando...'){
   document.getElementById('loading-msg').textContent = msg;
-  document.getElementById('loading-overlay').classList.add('show');
+  const ov = document.getElementById('loading-overlay');
+  ov.classList.remove('batch');
+  ov.classList.add('show');
 }
 function hideLoading(){
-  document.getElementById('loading-overlay').classList.remove('show');
+  const ov = document.getElementById('loading-overlay');
+  ov.classList.remove('show', 'batch');
 }
 
 // ── DB (formato: {value, updatedAt}) ─────────────────────────────────────────
@@ -266,8 +269,19 @@ async function escolherTurno(t){
 // ══════════════════════════════════════════════════════════════════════════════
 async function renderLeitos(){
   const wrap = document.getElementById('enfermarias-wrap');
+  if (!wrap) return;
+  wrap.innerHTML = '<p style="color:var(--muted);font-size:.8rem;padding:.5rem;">Carregando leitos...</p>';
+
+  let d;
+  try {
+    d = await leitosData();
+  } catch(e) {
+    wrap.innerHTML = '<p style="color:var(--vermelho);font-size:.8rem;padding:.5rem;">Erro ao carregar dados. Verifique a conexão.</p>';
+    console.error('leitosData:', e);
+    return;
+  }
+
   wrap.innerHTML = '';
-  const d = await leitosData();
   const hj = hoje();
 
   // Filtra enfermarias pela ala selecionada
@@ -1209,7 +1223,6 @@ async function gerarPreview(){
   // Salva no banco (Firestore + localStorage + memCache)
   const key = evKey(leitoAtual, turno, d.data || hoje());
   await dbSet(key, d);
-  memDel(key); // força refresh para mostrar badges no painel
 
   toast('✓ Evolução salva');
   _renderPreview(d);
@@ -1906,8 +1919,9 @@ async function imprimirLote(ala){
 
     // Monta HTML de todas as evoluções concatenadas para impressão
     let htmlTotal = '';
-    for (const { leito, pac, ev } of pares) {
+    for (const { leito, pac, ev: evOrig } of pares) {
       const enf = enfermariaDoLeito(leito);
+      const ev = { ...evOrig }; // não muta o cache
       ev.pac      = ev.pac      || pac.pac      || '';
       ev.diag     = ev.diag     || pac.diag     || '';
       ev.dn       = ev.dn       || pac.dn       || '';
@@ -1917,7 +1931,6 @@ async function imprimirLote(ala){
       ev.alergia  = ev.alergia  || pac.alergia  || '';
       ev.leito    = leito;
       ev.turno    = turno;
-      // Gera HTML da evolução usando o mesmo _htmlEvolucao
       htmlTotal += _htmlEvolucaoLote(ev, enf, leito);
     }
 
@@ -1931,9 +1944,45 @@ async function imprimirLote(ala){
   }
 }
 
+// ── HELPERS DE PROGRESSO ─────────────────────────────────────────────────────
+function _showProgress(titulo, msg){
+  const ov = document.getElementById('loading-overlay');
+  ov.classList.add('show', 'batch');
+  document.getElementById('progress-title').textContent = titulo;
+  document.getElementById('progress-msg').textContent = msg || '';
+  document.getElementById('progress-bar').style.width = '0%';
+  document.getElementById('progress-count').textContent = '0 / 0';
+  document.getElementById('progress-percent').textContent = '0%';
+}
+function _updateProgress(atual, total, msg){
+  const pct = total > 0 ? Math.round((atual / total) * 100) : 0;
+  document.getElementById('progress-bar').style.width = pct + '%';
+  document.getElementById('progress-count').textContent = `${atual} / ${total}`;
+  document.getElementById('progress-percent').textContent = pct + '%';
+  if (msg) document.getElementById('progress-msg').textContent = msg;
+}
+function _hideProgress(){
+  const ov = document.getElementById('loading-overlay');
+  ov.classList.remove('show', 'batch');
+}
+
+// ── PROTEÇÃO CONTRA FECHAR JANELA DURANTE ENVIO ──────────────────────────────
+let _envioEmAndamento = false;
+function _instalarProtecaoFechamento(){
+  if (window._unloadHandler) return;
+  window._unloadHandler = (ev) => {
+    if (_envioEmAndamento) {
+      ev.preventDefault();
+      ev.returnValue = 'Envio em andamento. Aguarde a conclusão antes de fechar.';
+      return ev.returnValue;
+    }
+  };
+  window.addEventListener('beforeunload', window._unloadHandler);
+}
+
 function confirmarEnvioLote(){
   const nomeAla = alaAtual === 'terreo' ? 'CM Térreo' : alaAtual === 'primeiro' ? 'CM 1º Andar' : 'todas as alas';
-  if (!confirm(`Enviar todos os PDFs do turno ${turno} (${nomeAla}) ao Drive?\n\nIsso pode levar alguns minutos dependendo do número de evoluções.`)) return;
+  if (!confirm(`Enviar todos os PDFs do turno ${turno} (${nomeAla}) ao Drive?\n\nIsso pode levar alguns minutos. Não feche a janela nem troque de aba durante o envio.`)) return;
   enviarTodosAoDrive(alaAtual);
 }
 
@@ -1945,15 +1994,15 @@ async function enviarTodosAoDrive(ala){
   const enfs = (ala === 'todos' ? ENFERMARIAS : ENFERMARIAS.filter(e => e.ala === ala));
   const leitos = enfs.flatMap(e => e.leitos);
 
-  showLoading('Carregando evoluções...');
+  _showProgress('Carregando evoluções...', 'Buscando dados no banco...');
   let ld, evs;
   try {
     ld = await leitosData();
     const chaves = leitos.filter(n => ld[n]?.ocupado).map(n => evKey(n, turno, hj));
-    if (!chaves.length) { hideLoading(); toast('Nenhum leito ocupado nesta ala', true); return; }
+    if (!chaves.length) { _hideProgress(); toast('Nenhum leito ocupado nesta ala', true); return; }
     evs = await dbGetMany(chaves);
   } catch(e) {
-    hideLoading(); toast('Erro ao carregar dados: ' + e.message, true); return;
+    _hideProgress(); toast('Erro ao carregar dados: ' + e.message, true); return;
   }
 
   const pares = leitos
@@ -1972,100 +2021,156 @@ async function enviarTodosAoDrive(ala){
       return { leito: n, enf: enfermariaDoLeito(n), ev };
     });
 
-  if (!pares.length) { hideLoading(); toast('Nenhuma evolução preenchida neste turno', true); return; }
+  if (!pares.length) { _hideProgress(); toast('Nenhuma evolução preenchida neste turno', true); return; }
+
+  // Inicia proteção contra fechamento
+  _envioEmAndamento = true;
+  _instalarProtecaoFechamento();
+
+  // Atualiza título da progress bar
+  _showProgress(
+    `Enviando ${pares.length} evolução${pares.length>1?'ões':''} ao Drive`,
+    'Preparando primeiro envio...'
+  );
+  _updateProgress(0, pares.length, 'Iniciando...');
 
   // Cria contêiner oculto para renderizar cada evolução
-  const cont = document.createElement('div');
-  cont.id = 'lote-render-area';
-  cont.style.cssText = 'position:fixed;left:-9999px;top:0;width:780px;background:white;font-family:IBM Plex Sans,sans-serif;font-size:.66rem;line-height:1.35;z-index:-1;';
-  document.body.appendChild(cont);
-
-  const LARGURA = 780;
-  const {jsPDF} = window.jspdf;
-  const [ano,mes,dia] = hj.split('-');
-  const dataBR = dia + mes + ano;
-
+  let cont = null;
   let ok = 0, erros = 0;
+  const errosDetalhe = [];
 
-  for (let i = 0; i < pares.length; i++) {
-    const { leito, enf, ev } = pares[i];
-    showLoading(`Enviando ${i+1}/${pares.length} — Leito ${pad(leito)}...`);
+  try {
+    cont = document.createElement('div');
+    cont.id = 'lote-render-area';
+    cont.style.cssText = 'position:absolute;left:-99999px;top:0;width:780px;background:white;font-family:IBM Plex Sans,sans-serif;font-size:.66rem;line-height:1.35;visibility:visible;';
+    document.body.appendChild(cont);
 
-    try {
-      // Renderiza HTML da evolução no contêiner oculto
-      cont.innerHTML = _htmlEvolucaoLote(ev, enf, leito);
+    const LARGURA = 780;
+    const {jsPDF} = window.jspdf;
+    const [ano,mes,dia] = hj.split('-');
+    const dataBR = dia + mes + ano;
 
-      // Aguarda um frame para o browser renderizar
-      await new Promise(r => setTimeout(r, 120));
-
-      const canvas = await html2canvas(cont, {
-        scale: 2, useCORS: true, backgroundColor: '#ffffff', logging: false,
-        width: LARGURA, windowWidth: LARGURA
-      });
-
-      // Monta PDF de uma página (evolução cabe em 1–2 páginas)
-      const pdf = new jsPDF({ orientation:'portrait', unit:'mm', format:'a4' });
-      const pageW = pdf.internal.pageSize.getWidth();
-      const pageH = pdf.internal.pageSize.getHeight();
-      const margin = 8;
-      const contentW = pageW - margin*2;
-      const contentH = pageH - margin*2;
-      const pxPorPag = Math.floor((contentH / contentW) * canvas.width);
-
-      const addFatia = (yStart, yEnd) => {
-        const h = yEnd - yStart;
-        const sc = document.createElement('canvas');
-        sc.width = canvas.width; sc.height = h;
-        const ctx = sc.getContext('2d');
-        ctx.fillStyle = '#fff'; ctx.fillRect(0,0,sc.width,h);
-        ctx.drawImage(canvas, 0,yStart, canvas.width,h, 0,0, canvas.width,h);
-        const mmH = (h / canvas.width) * contentW;
-        pdf.addImage(sc.toDataURL('image/jpeg',.92), 'JPEG', margin, margin, contentW, mmH);
-      };
-
-      if (canvas.height <= pxPorPag) {
-        addFatia(0, canvas.height);
-      } else {
-        addFatia(0, pxPorPag);
-        pdf.addPage();
-        addFatia(pxPorPag, Math.min(pxPorPag * 2, canvas.height));
-      }
-
-      // Envia ao Drive
+    for (let i = 0; i < pares.length; i++) {
+      const { leito, enf, ev } = pares[i];
       const nomePac  = (ev.pac || '').trim();
-      const primNome = (nomePac.split(' ')[0] || 'Pac').toUpperCase();
-      const pastaNome = nomePac
-        ? `Leito ${pad(leito)} - ${nomePac}`
-        : `Leito ${pad(leito)} - Sem identificacao`;
-      const titulo = `EvolucaoCM_L${pad(leito)}_${turno}_${dataBR}_${primNome}`;
+      _updateProgress(i, pares.length, `Leito ${pad(leito)} — ${nomePac || 'Sem identificação'}`);
 
-      const base64 = pdf.output('datauristring').split(',')[1];
-      await fetch(APPS_SCRIPT_URL, {
-        method: 'POST',
-        mode: 'no-cors',
-        headers: { 'Content-Type': 'text/plain' },
-        body: JSON.stringify({
-          titulo,
-          arquivoBase64: base64,
-          pasta: pastaNome,
-          pastaRaizId: PASTA_EVOLUCAO_ID
-        })
-      });
+      try {
+        cont.innerHTML = _htmlEvolucaoLote(ev, enf, leito);
+        // Aguarda 2 frames + 80ms — renderização robusta entre iterações
+        await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+        await new Promise(r => setTimeout(r, 80));
 
-      ok++;
-    } catch(e) {
-      console.error(`Leito ${leito}:`, e);
-      erros++;
+        const canvas = await html2canvas(cont, {
+          scale: 2, useCORS: true, backgroundColor: '#ffffff', logging: false,
+          width: LARGURA, windowWidth: LARGURA
+        });
+
+        const pdf = new jsPDF({ orientation:'portrait', unit:'mm', format:'a4' });
+        const pageW = pdf.internal.pageSize.getWidth();
+        const pageH = pdf.internal.pageSize.getHeight();
+        const margin = 8;
+        const contentW = pageW - margin*2;
+        const contentH = pageH - margin*2;
+        const pxPorPag = Math.floor((contentH / contentW) * canvas.width);
+
+        const addFatia = (yStart, yEnd) => {
+          const h = yEnd - yStart;
+          const sc = document.createElement('canvas');
+          sc.width = canvas.width; sc.height = h;
+          const ctx = sc.getContext('2d');
+          ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, sc.width, h);
+          ctx.drawImage(canvas, 0, yStart, canvas.width, h, 0, 0, canvas.width, h);
+          const mmH = (h / canvas.width) * contentW;
+          pdf.addImage(sc.toDataURL('image/jpeg', .92), 'JPEG', margin, margin, contentW, mmH);
+        };
+
+        if (canvas.height <= pxPorPag) {
+          addFatia(0, canvas.height);
+        } else {
+          // Suporta até 3 páginas por evolução
+          let y = 0, p = 0;
+          while (y < canvas.height && p < 3) {
+            if (p > 0) pdf.addPage();
+            const yEnd = Math.min(y + pxPorPag, canvas.height);
+            addFatia(y, yEnd);
+            y = yEnd; p++;
+          }
+        }
+
+        const primNome = (nomePac.split(' ')[0] || 'Pac').toUpperCase();
+        const pastaNome = nomePac
+          ? `Leito ${pad(leito)} - ${nomePac}`
+          : `Leito ${pad(leito)} - Sem identificacao`;
+        const titulo = `EvolucaoCM_L${pad(leito)}_${turno}_${dataBR}_${primNome}`;
+
+        const base64 = pdf.output('datauristring').split(',')[1];
+        await fetch(APPS_SCRIPT_URL, {
+          method: 'POST',
+          mode: 'no-cors',
+          headers: { 'Content-Type': 'text/plain' },
+          body: JSON.stringify({
+            titulo,
+            arquivoBase64: base64,
+            pasta: pastaNome,
+            pastaRaizId: PASTA_EVOLUCAO_ID
+          })
+        });
+
+        // Pausa entre requests para evitar saturar Apps Script
+        await new Promise(r => setTimeout(r, 600));
+
+        ok++;
+        _updateProgress(i + 1, pares.length, `Leito ${pad(leito)} — enviado ✓`);
+      } catch(e) {
+        console.error(`Leito ${leito}:`, e);
+        erros++;
+        errosDetalhe.push(`Leito ${pad(leito)}: ${e.message || e}`);
+        _updateProgress(i + 1, pares.length, `Leito ${pad(leito)} — erro ✗`);
+      }
     }
+  } finally {
+    // Cleanup robusto — sempre executa
+    if (cont && cont.parentNode) cont.parentNode.removeChild(cont);
+    _envioEmAndamento = false;
+    _hideProgress();
   }
 
-  document.body.removeChild(cont);
-  hideLoading();
-
+  // Confirmação final detalhada
+  const nomeAla = ala === 'terreo' ? 'CM Térreo' : ala === 'primeiro' ? 'CM 1º Andar' : 'Todas as alas';
   if (erros === 0) {
-    toast(`✓ ${ok} PDF${ok>1?'s':''} enviado${ok>1?'s':''} ao Drive`);
+    alert(
+      `✓ ENVIO CONCLUÍDO\n\n` +
+      `Ala: ${nomeAla}\n` +
+      `Turno: ${turno}\n` +
+      `${ok} PDF${ok>1?'s':''} enviado${ok>1?'s':''} ao Drive com sucesso.\n\n` +
+      `Os arquivos estão na pasta CM – Evoluções da Enfermagem, organizados por paciente.`
+    );
+    toast(`✓ ${ok} evolução${ok>1?'ões':''} enviada${ok>1?'s':''}`);
+  } else if (ok === 0) {
+    alert(
+      `✗ FALHA NO ENVIO\n\n` +
+      `Nenhum dos ${erros} PDFs foi enviado.\n\n` +
+      `Possíveis causas:\n` +
+      `• Sem conexão com a internet\n` +
+      `• Apps Script fora do ar\n` +
+      `• Pasta do Drive sem permissão de escrita\n\n` +
+      `Detalhes:\n` +
+      errosDetalhe.slice(0, 5).join('\n') +
+      (errosDetalhe.length > 5 ? `\n... (+${errosDetalhe.length-5})` : '')
+    );
+    toast(`Nenhum PDF enviado — ${erros} erros`, true);
   } else {
-    toast(`${ok} enviados, ${erros} com erro — verifique o console`, true);
+    alert(
+      `ENVIO PARCIAL\n\n` +
+      `Ala: ${nomeAla} · Turno: ${turno}\n` +
+      `${ok} enviado${ok!==1?'s':''} com sucesso.\n` +
+      `${erros} com erro:\n\n` +
+      errosDetalhe.slice(0, 8).join('\n') +
+      (errosDetalhe.length > 8 ? `\n... (+${errosDetalhe.length-8})` : '') +
+      `\n\nReenvie individualmente os leitos com erro pelo botão "☁ Salvar PDF no Drive" na pré-visualização.`
+    );
+    toast(`${ok} enviados, ${erros} com erro`, true);
   }
 }
 
